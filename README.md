@@ -1,6 +1,6 @@
 # 🔥 Concordia Dev-Log (Kinda Sorta)
 
-## 📅 Dev‑Log Entry: 02.05.25 – Vulkan + SDL3 Triangle (Cross‑Platform)
+## Dev‑Log: 02.05.25 – Vulkan + SDL3 Triangle (Cross‑Platform)
 
 Today, I wrestled with Vulkan’s verbosity, SDL3’s Wayland quirks, and Meson’s shader pipeline until a red triangle finally winked at me on Linux/Wayland—and not just there, but on any platform with a Vulkan ICD and SDL3. Tried multiple “hello triangle” examples, Tizen’s SDL‑Vulkan guide, Windows setup tutorials, and community Q\&A on Reddit and StackOverflow when things went black. Now, I have a fully Meson‑powered build that compiles GLSL→SPIR‑V by default and runs on Linux (X11/Wayland). Maybe runs on Windows, and macOS (via MoltenVK) without code changes.
 
