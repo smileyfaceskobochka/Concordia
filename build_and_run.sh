@@ -36,7 +36,7 @@ detect_distro() {
 distro=$(detect_distro)
 echo "Detected Linux distro: $distro"
 
-deps=(meson ninja glslc SDL3-config vulkaninfo)
+deps=(meson ninja glslc sdl3 vulkaninfo)
 
 missing=()
 for cmd in "${deps[@]}"; do
@@ -83,7 +83,7 @@ else
 fi
 echo "SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
 
-meson setup build --wipe
+meson setup build
 ninja -C build
 
 # 8) Run the demo
