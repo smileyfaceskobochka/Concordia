@@ -27,10 +27,13 @@ static std::vector<char> readFile(const std::string &path) {
 
 int main() {
   // 1) SDL init
-  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+  if (!SDL_Init(SDL_INIT_VIDEO)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << "\n";
     // return 1;
   }
+
+  std::cout << "Video driver selected: " << SDL_GetCurrentVideoDriver() << std::endl;
+
   // 2) create Vulkan window
   SDL_Window *win = SDL_CreateWindow("Vulkan Triangle", 800, 600,
                                      SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
@@ -305,6 +308,8 @@ int main() {
     pi.pImageIndices = &idx;
     VK_CHECK(vkQueuePresentKHR(queue, &pi));
   }
+
+  std::cout << "Exiting and cleaning up." << '\n';
 
   // 16) cleanup (reverse order) …
   vkDeviceWaitIdle(device);
