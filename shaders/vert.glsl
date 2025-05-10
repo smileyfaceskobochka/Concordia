@@ -1,4 +1,4 @@
-#version 450
+#version 460
 layout(location=0) out vec4 outColor;
 void main() {
   vec2 pos[3] = vec2[](vec2(-0.5,-0.5), vec2(0.5,-0.5), vec2(0.0,0.5));

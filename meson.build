@@ -1,4 +1,4 @@
-project('triangle', 'cpp', default_options: ['cpp_std=c++20'])
+project('triangle', 'cpp', default_options: ['cpp_std=c++23'])
 sdl = dependency('sdl3', required: true)
 vul = dependency('vulkan', required: true)
 vert = custom_target(
