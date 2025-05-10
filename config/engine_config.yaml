@@ -1,0 +1,5 @@
+# Plugins
+SystemWindow: SDL3Window
+SystemGraphics: VulkanGraphics
+
+PluginPath: "../plugins"

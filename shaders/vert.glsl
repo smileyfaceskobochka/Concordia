@@ -1,7 +1,17 @@
 #version 460
-layout(location=0) out vec4 outColor;
+
+// binding = 0 соответствует вашему VkDescriptorSetLayoutBinding
+layout(std430, binding = 0) buffer VertexData {
+    vec2 positions[];   // динамический массив позиций
+};
+
+layout(location = 0) out vec3 outColor;
+
 void main() {
-  vec2 pos[3] = vec2[](vec2(-0.5,-0.5), vec2(0.5,-0.5), vec2(0.0,0.5));
-  gl_Position = vec4(pos[gl_VertexIndex],0,1);
-  outColor = vec4(1,0,0,1);
+    // берём позицию из SSBO по индексу вершины
+    vec2 p = positions[gl_VertexIndex];
+    gl_Position = vec4(p, 0.0, 1.0);
+
+    // задаём цвет (оранжевый)
+    outColor = vec3(1.0, 0.5, 0.0);
 }
