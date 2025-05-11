@@ -7,16 +7,16 @@ bool Engine::init(const std::string &configPath) {
   // 1. Парсим YAML
   YAML::Node c = YAML::LoadFile(configPath);
   std::string pluginDir = c["PluginPath"].as<std::string>();
-  std::string winName = c["WindowSystem"].as<std::string>();
-  std::string gfxName = c["GraphicsDevice"].as<std::string>();
+  std::string winName = c["SystemWindow"].as<std::string>();
+  std::string gfxName = c["SystemGraphics"].as<std::string>();
 
   _winName = winName;
   _gfxName = gfxName;
 
   // 2. Загружаем либы
-  if (!_loader.loadLibrary(winName, pluginDir + "/" + winName + ".so"))
+  if (!_loader.loadLibrary(winName, pluginDir + "/" + winName + "/lib" + winName + ".so"))
     return false;
-  if (!_loader.loadLibrary(gfxName, pluginDir + "/" + gfxName + ".so"))
+  if (!_loader.loadLibrary(gfxName, pluginDir + "/" + gfxName + "/lib" + gfxName + ".so"))
     return false;
 
   // 3. Создаем подсистемы

@@ -3,7 +3,6 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ──────────────── 💬 Help ────────────────
 if [[ "${1:-}" == "--help" ]]; then
   cat <<EOF
 Usage: ${0##*/} [--help]
@@ -16,174 +15,138 @@ EOF
   exit 0
 fi
 
-# ──────────────── 🔍 Dependency Lists ────────────────
+# ──────────────── Dependency definitions ────────────────
+
 required_cmds=(meson ninja glslc vulkaninfo pkg-config)
-required_pkgs=(sdl3-dev)
+required_pkgs=(sdl3 yaml-cpp)
 
-# ──────────────── 📦 Package Managers ────────────────
-package_managers=(apt dnf yum pacman zypper apk emerge nix brew snap flatpak)
+package_managers=(
+  apt dnf yum pacman zypper apk emerge nix brew snap flatpak
+)
 declare -A install_cmd_map=(
-  [apt]="install -y"
-  [dnf]="install -y"
-  [yum]="install -y"
-  [pacman]="-S --noconfirm"
-  [zypper]="install -y"
-  [apk]="add"
-  [emerge]="--ask=n"
-  [nix]="install"
-  [brew]="install"
-  [snap]="install"
-  [flatpak]="install"
+  [apt]="install -y" [dnf]="install -y" [yum]="install -y"
+  [pacman]="-S --noconfirm" [zypper]="install -y" [apk]="add"
+  [emerge]="--ask=n" [nix]="install" [brew]="install"
+  [snap]="install" [flatpak]="install"
 )
 
-# ──────────────── 🔗 Package Mappings ────────────────
 declare -A pkg_map_apt=(
-  [meson]="meson"
-  [ninja]="ninja-build"
-  [glslc]="shaderc"
-  [vulkaninfo]="vulkan-tools"
-  [pkg-config]="pkg-config"
-  [sdl3-dev]="libsdl3-dev"
+  [meson]="meson" [ninja]="ninja-build" [glslc]="shaderc"
+  [vulkaninfo]="vulkan-tools" [pkg-config]="pkg-config"
+  [sdl3]="libsdl3-dev" [yaml-cpp]="libyaml-cpp-dev"
 )
-
-declare -A pkg_map_pacman=(
-  [meson]="meson"
-  [ninja]="ninja"
-  [glslc]="shaderc"
-  [vulkaninfo]="vulkan-tools"
-  [pkg-config]="pkgconf"
-  [sdl3-dev]="sdl3"
-)
-
 declare -A pkg_map_dnf=(
-  [meson]="meson"
-  [ninja]="ninja-build"
-  [glslc]="shaderc"
-  [vulkaninfo]="vulkan-tools"
-  [pkg-config]="pkgconf-pkg-config"
-  [sdl3-dev]="SDL3-devel"
+  [meson]="meson" [ninja]="ninja-build" [glslc]="shaderc"
+  [vulkaninfo]="vulkan-tools" [pkg-config]="pkgconf-pkg-config"
+  [sdl3]="SDL3-devel" [yaml-cpp]="yaml-cpp-devel"
 )
-
-declare -A pkg_map_yum=(
-  [meson]="meson"
-  [ninja]="ninja-build"
-  [glslc]="shaderc"
-  [vulkaninfo]="vulkan-tools"
-  [pkg-config]="pkgconf-pkg-config"
-  [sdl3-dev]="SDL3-devel"
+declare -A pkg_map_yum="${pkg_map_dnf[@]}"
+declare -A pkg_map_pacman=(
+  [meson]="meson" [ninja]="ninja" [glslc]="shaderc"
+  [vulkaninfo]="vulkan-tools" [pkg-config]="pkgconf"
+  [sdl3]="sdl3" [yaml-cpp]="yaml-cpp"
 )
-
 declare -A pkg_map_zypper=(
-  [meson]="meson"
-  [ninja]="ninja"
-  [glslc]="shaderc"
-  [vulkaninfo]="vulkan-tools"
-  [pkg-config]="pkg-config"
-  [sdl3-dev]="libSDL3-devel"
+  [meson]="meson" [ninja]="ninja" [glslc]="shaderc"
+  [vulkaninfo]="vulkan-tools" [pkg-config]="pkg-config"
+  [sdl3]="libSDL3-devel" [yaml-cpp]="yaml-cpp-devel"
 )
-
 declare -A pkg_map_apk=(
-  [meson]="meson"
-  [ninja]="ninja"
-  [glslc]="shaderc"
-  [vulkaninfo]="vulkan-tools"
-  [pkg-config]="pkgconf"
-  [sdl3-dev]="sdl3-dev"
+  [meson]="meson" [ninja]="ninja" [glslc]="shaderc"
+  [vulkaninfo]="vulkan-tools" [pkg-config]="pkgconf"
+  [sdl3]="sdl3-dev" [yaml-cpp]="yaml-cpp-dev"
 )
 
-# ──────────────── 🛠 Functions ────────────────
 detect_installed_package_managers() {
-  local found=()
-  for mgr in "${package_managers[@]}"; do
-    command -v "$mgr" &>/dev/null && found+=("$mgr")
+  for m in "${package_managers[@]}"; do
+    command -v "$m" &>/dev/null && echo "$m"
   done
-  echo "${found[@]}"
 }
 
 choose_package_manager() {
-  local options=("$@")
-  if ((${#options[@]} == 0)); then
-    echo "❌ No supported package managers found." >&2
-    exit 1
-  elif ((${#options[@]} == 1)); then
-    echo "${options[0]}"
+  local opts=("$@")
+  if ((${#opts[@]} == 1)); then
+    echo "${opts[0]}"
   else
-    echo "Multiple package managers detected. Select one:"
-    select pm in "${options[@]}"; do
-      [[ -n "$pm" ]] && echo "$pm" && break
+    echo "Multiple package managers found. Please select one:"
+    select pm in "${opts[@]}"; do
+      [[ -n "$pm" ]] && { echo "$pm"; break; }
     done
   fi
 }
 
+check_command() { command -v "$1" &>/dev/null; }
+check_pkg()     { pkg-config --exists "$1" 2>/dev/null; }
+
+check_dependencies() {
+  local miss=()
+  for cmd in "${required_cmds[@]}"; do
+    check_command "$cmd" || miss+=("$cmd")
+  done
+  for pkg in "${required_pkgs[@]}"; do
+    check_pkg "$pkg" || miss+=("$pkg")
+  done
+  echo "${miss[@]}"
+}
+
 map_packages() {
   local mgr=$1; shift
-  local deps=("$@")
-  local map_name="pkg_map_$mgr"
-  declare -n pkg_map="$map_name"
-  local result=()
-
-  for dep in "${deps[@]}"; do
-    result+=("${pkg_map[$dep]:-$dep}")
+  local deps=("$@") result=()
+  local map_var="pkg_map_$mgr"; declare -n pm=$map_var
+  for d in "${deps[@]}"; do
+    result+=("${pm[$d]:-$d}")
   done
-
   echo "${result[@]}"
 }
 
-check_command() { command -v "$1" &>/dev/null; }
-check_pkg_config() { pkg-config --exists "$1" 2>/dev/null; }
+main() {
+  echo "Checking for required tools and libraries..."
+  mapfile -t mgrs < <(detect_installed_package_managers)
+  pkg_mgr=$(choose_package_manager "${mgrs[@]}")
+  echo "Using package manager: $pkg_mgr"
 
-check_dependencies() {
-  local missing=()
-  for cmd in "${required_cmds[@]}"; do
-    check_command "$cmd" || missing+=("$cmd")
-  done
-  for pkg in "${required_pkgs[@]}"; do
-    check_pkg_config "$pkg" || missing+=("$pkg")
-  done
-  echo "${missing[@]}"
-}
-
-# ──────────────── 📦 Dependency Check ────────────────
-mgrs=($(detect_installed_package_managers))
-pkg_mgr=$(choose_package_manager "${mgrs[@]}")
-echo "✅ Using package manager: $pkg_mgr"
-
-missing=($(check_dependencies))
-if ((${#missing[@]})); then
-  echo "🔍 Missing dependencies: ${missing[*]}"
-  read -rp "Install them automatically? [Y/n] " ans
-  ans=${ans:-Y}
-  if [[ "$ans" =~ ^[Yy]$ ]]; then
-    install_cmd="${install_cmd_map[$pkg_mgr]}"
-    pkgs=($(map_packages "$pkg_mgr" "${missing[@]}"))
-    echo "📦 Installing: ${pkgs[*]}"
-    if (( UID != 0 )); then
-      sudo "$pkg_mgr" $install_cmd "${pkgs[@]}"
+  IFS=' ' read -r -a missing <<< "$(check_dependencies)"
+  if ((${#missing[@]})); then
+    echo "Missing dependencies: ${missing[*]}"
+    read -rp "Install missing automatically? [Y/n] " ans
+    ans=${ans:-Y}
+    if [[ $ans =~ ^[Yy]$ ]]; then
+      install_cmd=${install_cmd_map[$pkg_mgr]}
+      mapfile -t to_install < <(map_packages "$pkg_mgr" "${missing[@]}")
+      echo "Installing: ${to_install[*]}"
+      if (( UID != 0 )); then
+        sudo "$pkg_mgr" $install_cmd "${to_install[@]}"
+      else
+        "$pkg_mgr" $install_cmd "${to_install[@]}"
+      fi
     else
-      "$pkg_mgr" $install_cmd "${pkgs[@]}"
+      echo "Aborted by user."; exit 1
     fi
   else
-    echo "🚫 Install dependencies manually and re-run."; exit 1
+    echo "All dependencies satisfied."
   fi
-else
-  echo "✅ All dependencies satisfied."
-fi
 
-# ──────────────── 🌐 Environment Setup ────────────────
-: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
-export XDG_RUNTIME_DIR
-[[ -n "${WAYLAND_DISPLAY:-}" ]] && export SDL_VIDEODRIVER=wayland || export SDL_VIDEODRIVER=x11
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  export SDL_VIDEODRIVER="${WAYLAND_DISPLAY:+wayland}"
+  export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+  echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+  echo "SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
 
-echo "🌐 XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
-echo "🌐 SDL_VIDEODRIVER=$SDL_VIDEODRIVER"
+  echo "Configuring Meson..."
+  meson setup build --wipe
 
-# ──────────────── 🛠 Build ────────────────
-echo "🧱 Setting up Meson..."
-meson setup build --wipe
+  echo "Building project..."
+  meson compile -C build
 
-echo "🔨 Compiling project..."
-meson compile -C build
+  # copy config into build so engine can find it
+  cp -r config build/
 
-# ──────────────── 🚀 Run ────────────────
-echo "🚀 Launching demo..."
-build/src/triangle_engine
+  export LD_LIBRARY_PATH="/usr/lib:${LD_LIBRARY_PATH:-}"
+
+  echo "Launching demo from build/ ..."
+  pushd build > /dev/null
+  ./src/triangle_engine config/engine_config.yaml
+  popd > /dev/null
+}
+
+main "$@"
