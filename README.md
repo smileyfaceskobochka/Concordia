@@ -1,58 +1,87 @@
 # 🔥 Concordia Dev-Log (Kinda Sorta)
 
-## 📅 Dev‑Log Entry: 02.05.25 – Vulkan + SDL3 Triangle (Cross‑Platform)
+## 📅 Dev‑Log Entry: 25.03.26 - The Great CMake & vk-bootstrap Migration
 
-Today, I wrestled with Vulkan’s verbosity, SDL3’s Wayland quirks, and Meson’s shader pipeline until a red triangle finally winked at me on Linux/Wayland—and not just there, but on any platform with a Vulkan ICD and SDL3. Tried multiple “hello triangle” examples, Tizen’s SDL‑Vulkan guide, Windows setup tutorials, and community Q\&A on Reddit and StackOverflow when things went black. Now, I have a fully Meson‑powered build that compiles GLSL→SPIR‑V by default and runs on Linux (X11/Wayland). Maybe runs on Windows, and macOS (via MoltenVK) without code changes.
+Today, the entire foundation underwent a massive seismic shift. Meson was ripped out, and raw Vulkan initialization was purged in favor of a modern, streamlined, and highly robust architecture. The triangle no longer just sits there squashed—it spins dynamically, aspect-corrected, and time-driven.
 
-<small>🫃 So full... Yet, feed me more...</small>
+<small>🫃 Building the engine, one struct at a time...</small>
 
 ### What Achieved
 
-#### Cross‑Platform “Hello Triangle”
+#### 1. Pure CMake + Ninja Build System
+* **No more shell scripts or Meson:** Transitioned completely to a `CMakeLists.txt` driven by `CMakePresets.json`.
+* **One-command builds:** `cmake --build --preset run` gracefully handles configuring, building, shader compilation, and execution.
+* **Hermetic submodules:** `SDL3` and `vk-bootstrap` are now statically linked right from `third_party/`, ensuring guaranteed cross-platform reproducibility without system package hunting.
 
-* **Unified codebase** using SDL3 for windowing and input, Vulkan for rendering, and Meson for builds—no GLFW, no platform‑specific `#ifdef`s.
-* **Shader compilation** baked into Meson (`build_by_default: true`) so `vert.spv` and `frag.spv` appear in `build/` automatically.
-* **Wayland support** via `SDL_VIDEODRIVER=wayland` + `XDG_RUNTIME_DIR` hints; validated against Hyprland and Tizen docs (Platform specific shit).
-* **Device‑agnostic setup** following SDL‑Vulkan tutorials and Sascha Willems examples—works on Intel, AMD, NVIDIA, plus MoltenVK on macOS.
+#### 2. vk-bootstrap Refactoring
+* Ripped out hundreds of lines of fragile Vulkan boilerplate.
+* Replaced with `vkb::InstanceBuilder`, `vkb::PhysicalDeviceSelector`, `vkb::DeviceBuilder`, and `vkb::SwapchainBuilder`.
+* The engine now handles API version bounds, validation layers, debug messengers, and optimal surface formats implicitly and safely.
 
-#### Pipeline Simplification
+#### 3. Zero-Stdlib (Almost) & High-Precision Timing
+* Nuked `<fstream>`, `<chrono>`, and `<iostream>`.
+* Replaced file loading with `SDL_LoadFile`, logging with `SDL_Log`, and timing with `SDL_GetPerformanceCounter`.
+* Animation now uses double-precision time to prevent float drift over long sessions.
 
-* Removed vertex‑buffer binding entirely; triangle generated in the vertex shader via `gl_VertexIndex`—zero “pull” setup in pipeline’s vertex‑input state.
-* Consistent render‑pass + swapchain code reused from minimal Vulkan samples to guarantee at least a cleared background if triangle mis‑configured.
+#### 4. Rock-Solid Swapchains & Wayland Fixes
+* **Aspect-ratio correction:** Passed dynamically via Vulkan Push Constants so the triangle is no longer squashed.
+* **HiDPI/Wayland correctness:** Replaced logical window dimensions with `SDL_GetWindowSizeInPixels()` during swapchain creation to prevent resolution mismatches on scaling compositors.
+* **Safe Resizing:** Moved swapchain recreation out of the synchronous event loop and into the top of the `drawFrame` boundary using a deferred `needsResize` flag.
 
-#### Troubleshooting & Validation
+#### 5. The Latin Architecture (Phase 1 Complete)
+* Extracted the monolithic `main.cpp` into a clean, modular namespace architecture.
+* **`Petra::Window`**: Manages the SDL3 window, OS events, and Vulkan surface.
+* **`Render::Context`**: Owns Vulkan initialization, queues, and swapchain recreation via `vk-bootstrap`.
+* **`Vigil::Overlay`**: Encapsulates `imgui` integration across SDL3 and Vulkan backends.
+* **`Nucleus::Engine`**: The irreducible center. Owns the render loop, pipeline, and sync primitives.
+* `main.cpp` is now a 10-line file that just instantiates `Nucleus::Engine` and runs.
 
-* Enabled `VK_LAYER_KHRONOS_validation` to catch missing `VK_KHR_surface` on instance vs. swapchain on device.
-* Verified with `vulkaninfo` and Sascha Willems’ demos to isolate SDL3 mis‑linking vs. Vulkan ICD issues.
+<small> The triangle spins, therefore I am.</small>
 
-<small> I use Arch, btw.</small>
+---
 
 ### 🫃 Next on My Course
 
-#### 1. Vertex Buffers & Attributes
+#### 1. Vertex & Index Buffers (Memory & Form)
+* Introduce `VulkanMemoryAllocator` (VMA) as a submodule.
+* Start loading arbitrary geometry (vertices with positions and colors) using VMA-backed `VkBuffer`s.
+* Abstract a `Mesh` structure to handle vertex inputs.
 
-Add a real vertex buffer (with `VkVertexInputBindingDescription` / `VkVertexInputAttributeDescription`) so I can pass arbitrary geometry instead of hard‑coded `gl_VertexIndex` positions.
+#### 3. 3D Math & Uniform Buffers
+* Integrate `glm` for vector and matrix math.
+* Implement a `Camera` class (View/Projection matrices).
+* Pass the MVP (Model-View-Projection) data to the shaders via Uniform Buffers instead of just relying on Push Constants.
 
-#### 2. Uniforms & Transformations
+#### 4. Depth Buffering & 3D Rendering
+* Introduce a depth attachment to the RenderPass.
+* Migrate from a 2D rotating triangle to proper 3D cubes with perspective projection.
 
-Introduce uniform buffers for model/view/projection matrices, leveraging descriptor sets and push constants to animate a rotating triangle in 3D space.
+---
 
-#### 3. C++20 Migration
+## 📅 Dev‑Log Entry: 25.03.26 (Night) - Dimensions & Textures
 
-Refactor to C++20: use `std::span` for buffer data, `std::filesystem` for file I/O, and coroutines for asynchronous resource loading.
+With the foundation solid, the engine expanded into the third dimension and underwent a serious dependency detox. The squashed triangle is officially dead; long live the spinning, depth-tested cube.
 
-#### 4. 3D Scene & Lighting
+<small>📦 Allocating the future, one texel at a time...</small>
 
-Build a mini‑scene with depth testing, basic Phong lighting, and multiple meshes. Encapsulate Vulkan setup in RAII classes.
+### What Achieved
 
-#### 5. Engine Foundations for Concordia
+#### 1. VMA & Resource Management (`Memoria`)
+* **Submodule Integration:** Fully integrated `VulkanMemoryAllocator` (VMA).
+* **Unified Allocation:** All buffers (Vertex, Index) and Images are now managed via `Memoria::Allocator`, providing stable GPU memory management with minimal overhead.
 
-* **Module design:** Renderer, resource manager, input system, scene graph.
-* **Scripting interface:** Embed Lua or WASM for game logic.
-* **Cross‑platform packaging:** Windows installer, Linux AppImage, macOS bundle with MoltenVK.
+#### 2. 3D Engine Core (`Vista`, `Forma`)
+* **Perspective Camera:** Implemented `Vista::Camera` to handle View and Projection matrices.
+* **Depth Testing:** Added a depth buffer and configured the pipeline to handle occlusion, finally making 3D geometry look correct.
+* **Mesh Abstraction:** `Forma::Mesh` now supports UV coordinates and includes a primitive generator for spinning cubes.
 
-> “I’m so full… yea feed me more… Ohh, yeah.”
+#### 3. stb_image Detox & Pathing
+* **Purged SDL_image:** Ripped out the complex `SDL_image` dependency and replaced it with the lightweight, header-only `stb_image.h`.
+* **Centralized Assets:** Reorganized the build system to output compiled SPIR-V shaders directly to `assets/shaders/compiled/`.
+* **Robust Pathing:** Introduced the `CONCORDIA_ASSETS_DIR` compile-time macro, allowing the engine to reliably find textures and shaders regardless of the working directory.
 
-I've earned my rest; tomorrow I’ll feast on buffers, descriptors, and real‑time 3D. 🫃
+#### 4. Modern Pipeline Integration (`Lumen`)
+* Extended `Lumen::Pipeline` to support `VkDescriptorSetLayout`, enabling the wiring of combined image samplers.
+* Synchronized descriptor set updates with the texture loading lifecycle.
 
-![Today'sprogress](pics/02.05.25-dev_log.png)
+<small> The cube spins in depth, though its colors remain a mystery for now.</small>
