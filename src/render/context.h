@@ -63,6 +63,7 @@ private:
     VkImage m_depthImage = VK_NULL_HANDLE;
     VmaAllocation m_depthAllocation = VK_NULL_HANDLE;
     VkImageView m_depthView = VK_NULL_HANDLE;
+    VmaAllocator m_vma = VK_NULL_HANDLE;
     VkFormat m_depthFormat = VK_FORMAT_D32_SFLOAT;
 
     std::string m_gpuName;

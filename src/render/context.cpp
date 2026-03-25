@@ -72,7 +72,7 @@ Context::Context(const Petra::Window& window) {
 
 Context::~Context() {
     if (m_device) {
-        if (m_depthView) vkDestroyImageView(m_device, m_depthView, nullptr);
+        cleanupDepthBuffer(m_vma);
         vkDestroyRenderPass(m_device, m_renderPass, nullptr);
         vkb::destroy_swapchain(m_vkbSwapchain);
         vkb::destroy_device(m_vkbDevice);
@@ -159,6 +159,7 @@ void Context::createRenderPass() {
 }
 
 void Context::initDepthBuffer(VmaAllocator allocator) {
+    m_vma = allocator;
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = m_depthFormat;

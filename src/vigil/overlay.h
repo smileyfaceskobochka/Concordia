@@ -4,6 +4,7 @@
 #include "render/context.h"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
+#include "mundus/scene.h"
 
 namespace Vigil {
 
@@ -14,6 +15,10 @@ struct DebugStats {
     uint32_t vertexCount = 0;
     glm::vec3 cameraPos{0.0f};
     glm::vec3 cameraFront{0.0f};
+    
+    float* cameraSpeed = nullptr;
+    float* cameraSens = nullptr;
+    bool* captureMouse = nullptr;
 };
 
 class Overlay {
@@ -28,7 +33,7 @@ public:
     void beginFrame();
     
     // Renders the custom engine overlay
-    void drawUI(const Render::Context& renderCtx, const DebugStats& stats);
+    void drawUI(const Render::Context& renderCtx, const DebugStats& stats, Mundus::Scene& scene);
 
     // Renders ImGui data to the command buffer
     void endFrameAndRecord(VkCommandBuffer cmdBuf);
@@ -36,6 +41,7 @@ public:
 private:
     VkDevice m_device = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+    int m_selectedEntity = -1;
 };
 
 } // namespace Vigil

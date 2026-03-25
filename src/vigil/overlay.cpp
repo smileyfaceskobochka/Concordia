@@ -85,7 +85,7 @@ void Overlay::beginFrame() {
     ImGui::NewFrame();
 }
 
-void Overlay::drawUI(const Render::Context& renderCtx, const DebugStats& stats) {
+void Overlay::drawUI(const Render::Context& renderCtx, const DebugStats& stats, Mundus::Scene& scene) {
     const float PAD = 10.0f;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImVec2 work_pos = viewport->WorkPos;
@@ -112,13 +112,118 @@ void Overlay::drawUI(const Render::Context& renderCtx, const DebugStats& stats) 
         ImGui::Text("  Pos:   (%.1f, %.1f, %.1f)", stats.cameraPos.x, stats.cameraPos.y, stats.cameraPos.z);
         ImGui::Text("  Front: (%.2f, %.2f, %.2f)", stats.cameraFront.x, stats.cameraFront.y, stats.cameraFront.z);
 
-        ImGui::Separator();
         ImGui::Text("Graphics:");
         ImGui::Text("  GPU: %s", renderCtx.getGPUName().c_str());
         
+        ImGui::Separator();
+        ImGui::Text("Controls:");
+        if (stats.cameraSpeed) ImGui::SliderFloat("Move Speed",   stats.cameraSpeed, 0.1f, 50.0f);
+        if (stats.cameraSens)  ImGui::SliderFloat("Sensitivity",  stats.cameraSens, 0.01f, 1.0f);
+        
+        if (stats.captureMouse && !(*stats.captureMouse)) {
+            if (ImGui::Button("Enter Viewing Mode (Press ESC to exit)", ImVec2(-1.0f, 0.0f))) {
+                *stats.captureMouse = true;
+            }
+        } else if (stats.captureMouse) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "VIEWING MODE ACTIVE (ESC TO EXIT)");
+        }
+
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Global Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::DragFloat3("Direction", &scene.globalLightDir.x, 0.05f);
+            ImGui::ColorEdit3("Color", &scene.globalLightColor.x);
+        }
+
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Scene Hierarchy", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto& entities = scene.getEntities();
+            
+            std::function<void(int)> drawNode = [&](int index) {
+                auto& ent = entities[index];
+                
+                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanAvailWidth;
+                if (ent.children.empty()) {
+                    flags |= ImGuiTreeNodeFlags_Leaf;
+                }
+                if (m_selectedEntity == index) {
+                    flags |= ImGuiTreeNodeFlags_Selected;
+                }
+                
+                bool nodeOpen = ImGui::TreeNodeEx((void*)(intptr_t)index, flags, "%s", ent.name.c_str());
+                if (ImGui::IsItemClicked()) {
+                    m_selectedEntity = index;
+                }
+                
+                if (nodeOpen) {
+                    for (int childIdx : ent.children) {
+                        drawNode(childIdx);
+                    }
+                    ImGui::TreePop();
+                }
+            };
+
+            for (size_t i = 0; i < entities.size(); ++i) {
+                if (entities[i].parentIndex == -1) {
+                    drawNode(static_cast<int>(i));
+                }
+            }
+        }
+        
+        ImGui::Separator();
+        if (m_selectedEntity >= 0 && m_selectedEntity < static_cast<int>(scene.getEntities().size())) {
+            auto& ent = scene.getEntities()[m_selectedEntity];
+            if (ImGui::CollapsingHeader("Inspector", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Text("Selected: %s", ent.name.c_str());
+                if (ent.mesh) {
+                    ImGui::TextDisabled("Vtx: %u", ent.mesh->vertexCount);
+                }
+                
+                ImGui::DragFloat3("Local Pos", &ent.transform.position.x, 0.1f);
+                
+                glm::vec3 rotDeg = glm::degrees(ent.transform.rotation);
+                if (ImGui::DragFloat3("Local Rot", &rotDeg.x, 1.0f)) {
+                    ent.transform.rotation = glm::radians(rotDeg);
+                }
+                
+                glm::vec3 spinDeg = glm::degrees(ent.transform.angularVelocity);
+                if (ImGui::DragFloat3("Spin Speed", &spinDeg.x, 5.0f)) {
+                    ent.transform.angularVelocity = glm::radians(spinDeg);
+                }
+                
+                ImGui::DragFloat3("Scale", &ent.transform.scale.x, 0.05f);
+
+                if (ent.material) {
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Text("Material: %s", ent.material->shaderName.c_str());
+                    
+                    ImGui::ColorEdit3("Base Color", &ent.material->baseColor.x);
+                    ImGui::SliderFloat("Roughness", &ent.material->roughness, 0.0f, 1.0f);
+                    ImGui::SliderFloat("Metallic", &ent.material->metallic, 0.0f, 1.0f);
+                    
+                    if (ImGui::BeginCombo("Shader", ent.material->shaderName.c_str())) {
+                        const char* shaders[] = { "blinn_phong", "unlit", "skybox" };
+                        for (int n = 0; n < 3; n++) {
+                            bool is_selected = (ent.material->shaderName == shaders[n]);
+                            if (ImGui::Selectable(shaders[n], is_selected)) {
+                                ent.material->shaderName = shaders[n];
+                            }
+                            if (is_selected) ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                }
+
+                ImGui::Spacing();
+                ImGui::Text("Global Position:");
+                ImGui::TextDisabled("(%.2f, %.2f, %.2f)", ent.globalTransform[3][0], ent.globalTransform[3][1], ent.globalTransform[3][2]);
+            }
+        } else {
+            ImGui::TextDisabled("No entity selected.");
+        }
+    }    
         ImGui::End();
     }
-}
 
 void Overlay::endFrameAndRecord(VkCommandBuffer cmdBuf) {
     ImGui::Render();

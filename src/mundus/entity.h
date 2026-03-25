@@ -1,9 +1,13 @@
 #pragma once
 
+#include <memory>
+#include <vector>
+#include <string>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
-#include <string>
+#include "../memoria/asset_manager.h"
+#include "../forma/material.h"
 
 namespace Mundus {
 
@@ -11,22 +15,23 @@ struct Transform {
     glm::vec3 position{0.0f};
     glm::vec3 rotation{0.0f};
     glm::vec3 scale{1.0f};
+    glm::vec3 angularVelocity{0.0f};
 
-    glm::mat4 getMatrix() const;
+    glm::mat4 getLocalMatrix() const;
 };
 
 struct Entity {
     std::string name;
     Transform transform;
     
-    // Mesh data (DOD-friendly)
-    VkBuffer vertexBuffer = VK_NULL_HANDLE;
-    VmaAllocation vertexAllocation = VK_NULL_HANDLE;
-    uint32_t vertexCount = 0;
+    // Hierarchy
+    int parentIndex = -1;
+    std::vector<int> children;
+    glm::mat4 globalTransform{1.0f};
 
-    VkBuffer indexBuffer = VK_NULL_HANDLE;
-    VmaAllocation indexAllocation = VK_NULL_HANDLE;
-    uint32_t indexCount = 0;
+    // Components
+    std::shared_ptr<Memoria::MeshAsset> mesh;
+    std::shared_ptr<Forma::Material> material;
 };
 
 } // namespace Mundus

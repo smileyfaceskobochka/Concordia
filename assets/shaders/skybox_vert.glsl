@@ -5,10 +5,7 @@ layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec3 inNormal;
 layout(location = 3) in vec2 inTexCoord;
 
-layout(location = 0) out vec3 fragColor;
-layout(location = 1) out vec2 fragTexCoord;
-layout(location = 2) out vec3 fragNormal;
-layout(location = 3) out vec3 fragPos;
+layout(location = 0) out vec3 fragTexCoord;
 
 layout(set = 0, binding = 0) uniform GlobalUBO {
     vec4 lightDir;
@@ -28,13 +25,10 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 void main() {
-    vec4 worldPos = pc.model * vec4(inPosition, 1.0);
-    gl_Position = ubo.proj * ubo.view * worldPos;
-    
-    fragPos = vec3(worldPos);
-    mat3 normalMatrix = transpose(inverse(mat3(pc.model)));
-    fragNormal = normalize(normalMatrix * inNormal);
-    
-    fragColor = inColor;
-    fragTexCoord = inTexCoord;
+    fragTexCoord = inPosition;
+    // Remove translation from view matrix
+    mat4 viewNoTransform = mat4(mat3(ubo.view));
+    vec4 pos = ubo.proj * viewNoTransform * pc.model * vec4(inPosition, 1.0);
+    // Skybox depth trick
+    gl_Position = pos.xyww;
 }

@@ -36,7 +36,7 @@ Today, the entire foundation underwent a massive seismic shift. Meson was ripped
 * **`Nucleus::Engine`**: The irreducible center. Owns the render loop, pipeline, and sync primitives.
 * `main.cpp` is now a 10-line file that just instantiates `Nucleus::Engine` and runs.
 
-<small> The triangle spins, therefore I am.</small>
+<small>The triangle spins, therefore I am.</small>
 
 ---
 
@@ -84,4 +84,17 @@ With the foundation solid, the engine expanded into the third dimension and unde
 * Extended `Lumen::Pipeline` to support `VkDescriptorSetLayout`, enabling the wiring of combined image samplers.
 * Synchronized descriptor set updates with the texture loading lifecycle.
 
-<small> The cube spins in depth, though its colors remain a mystery for now.</small>
+<small>The cube spins in depth, though its colors remain a mystery for now.</small>
+
+---
+
+#### Texture Pipeline — Fixed (Three Root Causes)
+* **Missing UVs in OBJ:** `cube.obj` had no `vt` entries at all. `fast_obj` silently returned `(0.0, 0.0)` for every vertex, making every face sample the same single grey texel. Added proper `vt` entries with per-face UV assignments.
+* **Wrong image format:** Texture was declared as `VK_FORMAT_R8G8B8A8_UNORM` during debugging. PNG stores sRGB data — sampling linearly skips gamma correction, making everything look flat and desaturated. Restored `VK_FORMAT_R8G8B8A8_SRGB`.
+* **Dark vertex tint:** Some cube vertices had colors as low as `{0.1, 0.1, 0.1}`. The shader computes `texture * vertexColor`, so dark vertices washed out entire faces. Set all to white `{1.0, 1.0, 1.0}`.
+
+<small>The cube finally has a face. And it looks great.</small>
+
+---
+
+Suggestions for future me: Try Slang for shaders, it's supposed to be better than glslc.

@@ -42,7 +42,7 @@ void Pipeline::init(const Render::Context& context, const PipelineConfig& config
 
     VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     raster.lineWidth = 1.0f;
-    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.cullMode = config.cullMode;
     raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -50,8 +50,8 @@ void Pipeline::init(const Render::Context& context, const PipelineConfig& config
 
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     ds.depthTestEnable = config.depthTest ? VK_TRUE : VK_FALSE;
-    ds.depthWriteEnable = config.depthTest ? VK_TRUE : VK_FALSE;
-    ds.depthCompareOp = VK_COMPARE_OP_LESS;
+    ds.depthWriteEnable = config.depthWriteEnable ? VK_TRUE : VK_FALSE;
+    ds.depthCompareOp = config.depthCompareOp;
 
     VkPipelineColorBlendAttachmentState cbAtt{};
     cbAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |

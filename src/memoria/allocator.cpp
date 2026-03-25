@@ -2,6 +2,7 @@
 #include "allocator.h"
 #include <stdexcept>
 #include <cstring>
+#include <vector>
 
 namespace Memoria {
 
@@ -42,6 +43,10 @@ void Allocator::destroyBuffer(VkBuffer buffer, VmaAllocation allocation) {
     vmaDestroyBuffer(m_allocator, buffer, allocation);
 }
 
+void Allocator::destroyImage(VkImage image, VmaAllocation allocation) {
+    vmaDestroyImage(m_allocator, image, allocation);
+}
+
 void Allocator::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size, 
                          VkQueue transferQueue, VkCommandPool commandPool, VkDevice device) {
     VkCommandBufferAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -77,20 +82,22 @@ void Allocator::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize 
 
 void Allocator::createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
                           VkImageUsageFlags usage, VmaMemoryUsage memoryUsage,
-                          VkImage& outImage, VmaAllocation& outAllocation) {
+                          VkImage& outImage, VmaAllocation& outAllocation,
+                          uint32_t layerCount, VkImageCreateFlags flags) {
     VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
     imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
+    imageInfo.arrayLayers = layerCount;
     imageInfo.format = format;
     imageInfo.tiling = tiling;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.flags = flags;
 
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = memoryUsage;
@@ -101,7 +108,8 @@ void Allocator::createImage(uint32_t width, uint32_t height, VkFormat format, Vk
 }
 
 void Allocator::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height,
-                                VkQueue transferQueue, VkCommandPool commandPool, VkDevice device) {
+                                VkQueue transferQueue, VkCommandPool commandPool, VkDevice device,
+                                uint32_t layerCount) {
     VkCommandBufferAllocateInfo allocInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocInfo.commandPool = commandPool;
@@ -114,18 +122,24 @@ void Allocator::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(commandBuffer, &beginInfo);
 
-    VkBufferImageCopy region = {};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;
-    region.bufferImageHeight = 0;
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.mipLevel = 0;
-    region.imageSubresource.baseArrayLayer = 0;
-    region.imageSubresource.layerCount = 1;
-    region.imageOffset = {0, 0, 0};
-    region.imageExtent = {width, height, 1};
+    std::vector<VkBufferImageCopy> regions;
+    VkDeviceSize layerSize = width * height * 4; // Assuming RGBA8
+    for (uint32_t i = 0; i < layerCount; ++i) {
+        VkBufferImageCopy region = {};
+        region.bufferOffset = layerSize * i;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = i;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = {0, 0, 0};
+        region.imageExtent = {width, height, 1};
+        regions.push_back(region);
+    }
 
-    vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+                           static_cast<uint32_t>(regions.size()), regions.data());
 
     vkEndCommandBuffer(commandBuffer);
 
@@ -163,7 +177,7 @@ void Allocator::transitionImageLayout(VkImage image, VkFormat format, VkImageLay
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 
     VkPipelineStageFlags sourceStage;
     VkPipelineStageFlags destinationStage;

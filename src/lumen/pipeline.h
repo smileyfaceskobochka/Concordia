@@ -18,6 +18,9 @@ struct PipelineConfig {
     std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
     std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
     bool depthTest = true;
+    bool depthWriteEnable = true;
+    VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
+    VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
 };
 
 class Pipeline {
