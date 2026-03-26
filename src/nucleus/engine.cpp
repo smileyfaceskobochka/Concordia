@@ -314,7 +314,7 @@ void Engine::initDescriptors() {
   // Load Skybox for Set 0 Binding 1
   m_skyboxTexture = m_assetManager->loadCubemapFromCross(
       std::string(CONCORDIA_ASSETS_DIR) +
-      "/images/skybox/Cubemap_Sky_01-512x512.png");
+      "/images/skybox/cubemap/Cubemap_Sky_01-512x512.png");
 
   SDL_Log("Engine: Descriptors: Updating set 0 (5 bindings)...");
   VkDescriptorImageInfo skyboxInfo{};
