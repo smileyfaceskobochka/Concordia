@@ -139,38 +139,13 @@ The engine gains a sky. The engine gains physically-based materials. The engine 
 
 ### 🫃 Next Session
 
-#### 1. Fix PBR Material Loading (Priority — Blocker)
-
-**Current symptoms (confirmed from screenshots):**
-* All five texture slots report "Assigned" in Vigil but the helmet renders black — meaning the CPU-side material struct has valid pointers but the GPU path is broken. Vigil's "Assigned" only checks for a non-null pointer, not that the descriptor is actually bound.
-* `metallic=1.0, roughness=1.0` in the inspector look like uninitialized scalar fallback values, not values read from the texture.
-* **Turning roughness and metallic sliders to 0 makes everything white** — this confirms the shader IS responding to the scalar push constant values but is completely ignoring the texture samples. The textures are bound wrong, not missing.
-* **Emissive teal glow IS visible** — at least one texture channel is reaching the shader correctly. Compare the emissive descriptor write against the others — the difference will reveal the bug.
-
-**Suspected root causes in order:**
-* **Wrong `VkImageLayout`** — most likely culprit. Produces silent black samples on most drivers:
-  ```cpp
-  // Wrong
-  imageInfo.imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  // Correct
-  imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  ```
-* **`vkUpdateDescriptorSets` not called after texture assignment** — material pointer is set but GPU descriptor is stale. "Assigned" in Vigil fires on pointer check, not on GPU state.
-* **Shader sampling scalars instead of textures** — the `roughness`/`metallic` push constant values are overriding texture samples. Check if the shader has a fallback path that bypasses `texture2D()` when scalars are non-zero.
-* **Metallic/roughness channel packing** — GLB packs both into one texture (G = roughness, B = metallic). Sampling the wrong channel returns 0 or 1 unexpectedly.
-
-**Debug steps:**
-* Check emissive descriptor write vs albedo/normal/met-rou — emissive works, others don't. The diff is the bug.
-* Add `SDL_Log` dump of `VkDescriptorImageInfo.imageLayout` for each slot at bind time.
-* Temporarily hardcode `roughness=0.5, metallic=0.5` in the shader itself, bypassing both texture and push constants — if the result changes, shader logic is the issue; if it stays black, it's the descriptor.
-
-#### 2. HDRI Upgrade
+#### 1. HDRI Upgrade
 * Source higher quality HDRIs from [Poly Haven](https://polyhaven.com/hdris) (CC0).
 * Good candidates: `autumn_field`, `kloofendal_48d_partly_cloudy`, `venice_sunset`.
 * Rebake cubemap + irradiance map via `cmft` for each new HDRI.
 * A gold cube (`metallic=1.0, roughness=0.0`) under a quality outdoor HDRI is the screenshot milestone.
 
-#### 3. Full PBR Texture Stack (Phase 6.5 Foundation)
+#### 2. Full PBR Texture Stack (Phase 6.5 Foundation)
 * `Forma::Material` is missing several slots that GLB provides — wire them up while `cgltf` is already integrated:
   * **Normal map** (`binding=1`) — required for correct BRDF on complex geometry, face normals alone look flat.
   * **Metallic/Roughness map** (`binding=2`) — G channel = roughness, B channel = metallic. Separate from albedo.
@@ -179,13 +154,13 @@ The engine gains a sky. The engine gains physically-based materials. The engine 
 * Update `Lumen::Pipeline` descriptor set layout to accommodate all five bindings.
 * Update `assets/shaders/frag.glsl` to sample each slot with correct fallback values when unbound (white for albedo/AO, `vec2(0.5, 0.0)` for metallic/roughness, black for emissive).
 
-#### 4. Texture Inspector in `Vigil`
+#### 3. Texture Inspector in `Vigil`
 * Dropdown per material slot: Albedo, Normal, Metallic/Roughness, AO, Emissive.
 * `ImGui::Image()` thumbnail for each bound texture — will make the PBR channel bug immediately visible without log diving.
 * Show raw scalar values (`roughness`, `metallic`, `baseColor`) alongside texture thumbnails.
 * "No texture" placeholder when a slot is unbound — grey checkerboard.
 
-#### 5. Vigil Debug Additions
+#### 4. Vigil Debug Additions
 * **GBuffer / channel visualizer** — toggle to isolate albedo, normals, metallic, roughness, depth individually. Essential for diagnosing any remaining PBR issues after the fix.
 * **Normal visualizer** — render normals as RGB colors directly, immediately catches broken normal map imports from GLB.
 * **IBL contribution toggle** — switch between ambient only, diffuse IBL only, specular IBL only, and combined. Isolates lighting bugs fast.
@@ -199,7 +174,7 @@ The engine gains a sky. The engine gains physically-based materials. The engine 
 
 The material system is no longer gaslighting me. GLTF PBR is now functionally correct, and the engine finally renders assets that look like they belong.
 
-<small>🧪 It was not Vulkan. It was never Vulkan.</small>
+<small>It was not Vulkan. It was never Vulkan.</small>
 
 ### What Achieved
 
@@ -209,3 +184,5 @@ The material system is no longer gaslighting me. GLTF PBR is now functionally co
   * Uploading only **vec3**
   * Losing the **bitangent sign**
 * Shader expected `fragTangent.w` → got garbage → **broken TBN matrix → lighting artifacts / black shading**
+
+> 💡 **Future Me:** Check out JoltPhysics when you're ready.
