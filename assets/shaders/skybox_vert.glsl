@@ -28,7 +28,10 @@ void main() {
     fragTexCoord = inPosition;
     // Remove translation from view matrix
     mat4 viewNoTransform = mat4(mat3(ubo.view));
-    vec4 pos = ubo.proj * viewNoTransform * pc.model * vec4(inPosition, 1.0);
-    // Skybox depth trick
+    
+    // Scaling doesn't matter for xyww trick
+    vec4 pos = ubo.proj * viewNoTransform * vec4(inPosition, 1.0);
+    
+    // Force z=1.0 at far plane
     gl_Position = pos.xyww;
 }

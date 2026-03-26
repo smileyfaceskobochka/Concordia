@@ -76,6 +76,7 @@ target_include_directories(Concordia PRIVATE
     third_party/vma/include
     third_party/glm
     third_party/fast_obj
+    third_party/cgltf
     third_party/stb
 )
 

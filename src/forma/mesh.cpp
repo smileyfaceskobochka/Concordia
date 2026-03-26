@@ -1,9 +1,57 @@
 #include "mesh.h"
 #include "fast_obj.h"
+
+#include <cmath>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace Forma {
+
+namespace {
+
+static glm::vec3 safeNormalize(const glm::vec3 &v) {
+  float len2 = glm::dot(v, v);
+  if (len2 <= 1e-20f) {
+    return glm::vec3(0.0f, 0.0f, 0.0f);
+  }
+  return v / std::sqrt(len2);
+}
+
+struct VertexHash {
+  size_t operator()(const Vertex &v) const {
+    auto hf = std::hash<float>{};
+
+    size_t h = 0;
+    auto hashCombine = [&](size_t x) {
+      h ^= x + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    };
+
+    hashCombine(hf(v.pos.x));
+    hashCombine(hf(v.pos.y));
+    hashCombine(hf(v.pos.z));
+
+    hashCombine(hf(v.color.x));
+    hashCombine(hf(v.color.y));
+    hashCombine(hf(v.color.z));
+
+    hashCombine(hf(v.normal.x));
+    hashCombine(hf(v.normal.y));
+    hashCombine(hf(v.normal.z));
+
+    hashCombine(hf(v.texCoord.x));
+    hashCombine(hf(v.texCoord.y));
+
+    hashCombine(hf(v.tangent.x));
+    hashCombine(hf(v.tangent.y));
+    hashCombine(hf(v.tangent.z));
+    hashCombine(hf(v.tangent.w));
+
+    return h;
+  }
+};
+
+} // namespace
 
 VkVertexInputBindingDescription Vertex::getBindingDescription() {
   VkVertexInputBindingDescription bindingDescription{};
@@ -15,7 +63,7 @@ VkVertexInputBindingDescription Vertex::getBindingDescription() {
 
 std::vector<VkVertexInputAttributeDescription>
 Vertex::getAttributeDescriptions() {
-  std::vector<VkVertexInputAttributeDescription> attributeDescriptions(4);
+  std::vector<VkVertexInputAttributeDescription> attributeDescriptions(5);
 
   attributeDescriptions[0].binding = 0;
   attributeDescriptions[0].location = 0;
@@ -37,113 +85,149 @@ Vertex::getAttributeDescriptions() {
   attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
   attributeDescriptions[3].offset = offsetof(Vertex, texCoord);
 
+  attributeDescriptions[4].binding = 0;
+  attributeDescriptions[4].location = 4;
+  attributeDescriptions[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+  attributeDescriptions[4].offset = offsetof(Vertex, tangent);
+
   return attributeDescriptions;
 }
 
 void Mesh::createCube(std::vector<Vertex> &outVertices,
                       std::vector<uint32_t> &outIndices) {
-  outVertices = {// Front face (Z=+0.5), normal +Z
-                 {{-0.5f, -0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, 1.0f},
-                  {0.0f, 0.0f}},
-                 {{0.5f, -0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, 1.0f},
-                  {1.0f, 0.0f}},
-                 {{0.5f, 0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, 1.0f},
-                  {1.0f, 1.0f}},
-                 {{-0.5f, 0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, 1.0f},
-                  {0.0f, 1.0f}},
-                 // Back face (Z=-0.5), normal -Z
-                 {{-0.5f, -0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, -1.0f},
-                  {1.0f, 0.0f}},
-                 {{0.5f, -0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, -1.0f},
-                  {0.0f, 0.0f}},
-                 {{0.5f, 0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, -1.0f},
-                  {0.0f, 1.0f}},
-                 {{-0.5f, 0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 0.0f, -1.0f},
-                  {1.0f, 1.0f}},
-                 // Bottom face (Y=-0.5), normal -Y
-                 {{-0.5f, -0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, -1.0f, 0.0f},
-                  {0.0f, 0.0f}},
-                 {{0.5f, -0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, -1.0f, 0.0f},
-                  {1.0f, 0.0f}},
-                 {{0.5f, -0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, -1.0f, 0.0f},
-                  {1.0f, 1.0f}},
-                 {{-0.5f, -0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, -1.0f, 0.0f},
-                  {0.0f, 1.0f}},
-                 // Top face (Y=+0.5), normal +Y
-                 {{-0.5f, 0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 1.0f, 0.0f},
-                  {0.0f, 1.0f}},
-                 {{0.5f, 0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 1.0f, 0.0f},
-                  {1.0f, 1.0f}},
-                 {{0.5f, 0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 1.0f, 0.0f},
-                  {1.0f, 0.0f}},
-                 {{-0.5f, 0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {0.0f, 1.0f, 0.0f},
-                  {0.0f, 0.0f}},
-                 // Left face (X=-0.5), normal -X
-                 {{-0.5f, -0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {-1.0f, 0.0f, 0.0f},
-                  {0.0f, 0.0f}},
-                 {{-0.5f, -0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {-1.0f, 0.0f, 0.0f},
-                  {1.0f, 0.0f}},
-                 {{-0.5f, 0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {-1.0f, 0.0f, 0.0f},
-                  {1.0f, 1.0f}},
-                 {{-0.5f, 0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {-1.0f, 0.0f, 0.0f},
-                  {0.0f, 1.0f}},
-                 // Right face (X=+0.5), normal +X
-                 {{0.5f, -0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {1.0f, 0.0f, 0.0f},
-                  {1.0f, 0.0f}},
-                 {{0.5f, -0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {1.0f, 0.0f, 0.0f},
-                  {0.0f, 0.0f}},
-                 {{0.5f, 0.5f, 0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {1.0f, 0.0f, 0.0f},
-                  {0.0f, 1.0f}},
-                 {{0.5f, 0.5f, -0.5f},
-                  {1.0f, 1.0f, 1.0f},
-                  {1.0f, 0.0f, 0.0f},
-                  {1.0f, 1.0f}}};
+  outVertices = {
+      // Front (+Z)
+      {{-0.5f, -0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, 1.0f},
+       {0.0f, 0.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, -0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, 1.0f},
+       {1.0f, 0.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, 0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, 1.0f},
+       {1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{-0.5f, 0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, 1.0f},
+       {0.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+
+      // Back (-Z)
+      {{-0.5f, -0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, -1.0f},
+       {1.0f, 0.0f},
+       {-1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, -0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, -1.0f},
+       {0.0f, 0.0f},
+       {-1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, 0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, -1.0f},
+       {0.0f, 1.0f},
+       {-1.0f, 0.0f, 0.0f, 1.0f}},
+      {{-0.5f, 0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 0.0f, -1.0f},
+       {1.0f, 1.0f},
+       {-1.0f, 0.0f, 0.0f, 1.0f}},
+
+      // Bottom (-Y)
+      {{-0.5f, -0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, -1.0f, 0.0f},
+       {0.0f, 0.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, -0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, -1.0f, 0.0f},
+       {1.0f, 0.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, -0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, -1.0f, 0.0f},
+       {1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{-0.5f, -0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, -1.0f, 0.0f},
+       {0.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+
+      // Top (+Y)
+      {{-0.5f, 0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 1.0f, 0.0f},
+       {0.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, 0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 1.0f, 0.0f},
+       {1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{0.5f, 0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 1.0f, 0.0f},
+       {1.0f, 0.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+      {{-0.5f, 0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {0.0f, 1.0f, 0.0f},
+       {0.0f, 0.0f},
+       {1.0f, 0.0f, 0.0f, 1.0f}},
+
+      // Left (-X)
+      {{-0.5f, -0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {-1.0f, 0.0f, 0.0f},
+       {0.0f, 0.0f},
+       {0.0f, 0.0f, 1.0f, 1.0f}},
+      {{-0.5f, -0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {-1.0f, 0.0f, 0.0f},
+       {1.0f, 0.0f},
+       {0.0f, 0.0f, 1.0f, 1.0f}},
+      {{-0.5f, 0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {-1.0f, 0.0f, 0.0f},
+       {1.0f, 1.0f},
+       {0.0f, 0.0f, 1.0f, 1.0f}},
+      {{-0.5f, 0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {-1.0f, 0.0f, 0.0f},
+       {0.0f, 1.0f},
+       {0.0f, 0.0f, 1.0f, 1.0f}},
+
+      // Right (+X)
+      {{0.5f, -0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f},
+       {1.0f, 0.0f},
+       {0.0f, 0.0f, -1.0f, 1.0f}},
+      {{0.5f, -0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f},
+       {0.0f, 0.0f},
+       {0.0f, 0.0f, -1.0f, 1.0f}},
+      {{0.5f, 0.5f, 0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f},
+       {0.0f, 1.0f},
+       {0.0f, 0.0f, -1.0f, 1.0f}},
+      {{0.5f, 0.5f, -0.5f},
+       {1.0f, 1.0f, 1.0f},
+       {1.0f, 0.0f, 0.0f},
+       {1.0f, 1.0f},
+       {0.0f, 0.0f, -1.0f, 1.0f}},
+  };
 
   outIndices = {
       0,  1,  2,  2,  3,  0,  // Front
@@ -163,97 +247,89 @@ void Mesh::loadFromOBJ(const std::string &path,
     throw std::runtime_error("Failed to load OBJ: " + path);
   }
 
-  // Reset just in case
   outVertices.clear();
   outIndices.clear();
 
+  std::unordered_map<Vertex, uint32_t, VertexHash> uniqueVertices;
+
   uint32_t indexOffset = 0;
+
   for (unsigned int i = 0; i < mesh->face_count; ++i) {
     unsigned int verticesInFace = mesh->face_vertices[i];
-
-    // Triangulate face
-    for (unsigned int j = 0; j < verticesInFace; ++j) {
-      // Standard triangulation: (0, 1, 2, 3, 4) -> (0, 1, 2), (0, 2, 3), (0, 3,
-      // 4)
-      if (j >= 3) {
-        // We need to re-add the first vertex and the previous vertex of the
-        // triangulation Actually, it's easier to just push indices if we reuse
-        // vertices. But for simplicity in this DOD model, we'll duplicate
-        // vertices for now.
-      }
-
-      // Correct triangulation for N vertices (fans):
-      if (j >= 3) {
-        // Triangle 1: 0, j-1, j
-        // But we are in a simple loop.
-      }
+    if (verticesInFace < 3) {
+      indexOffset += verticesInFace;
+      continue;
     }
 
-    // Compute flat face normal as fallback
-    glm::vec3 computedNormal = {0.0f, 1.0f, 0.0f};
-    if (verticesInFace >= 3) {
-      fastObjIndex idx0 = mesh->indices[indexOffset + 0];
-      fastObjIndex idx1 = mesh->indices[indexOffset + 1];
-      fastObjIndex idx2 = mesh->indices[indexOffset + 2];
-      glm::vec3 v0 = {mesh->positions[3 * idx0.p + 0],
-                      mesh->positions[3 * idx0.p + 1],
-                      mesh->positions[3 * idx0.p + 2]};
-      glm::vec3 v1 = {mesh->positions[3 * idx1.p + 0],
-                      mesh->positions[3 * idx1.p + 1],
-                      mesh->positions[3 * idx1.p + 2]};
-      glm::vec3 v2 = {mesh->positions[3 * idx2.p + 0],
-                      mesh->positions[3 * idx2.p + 1],
-                      mesh->positions[3 * idx2.p + 2]};
-      computedNormal = glm::normalize(glm::cross(v1 - v0, v2 - v0));
-    }
-
-    // Simpler approach: build a list of all vertices for the face
     std::vector<Vertex> faceVerts(verticesInFace);
+
     for (unsigned int j = 0; j < verticesInFace; ++j) {
       fastObjIndex idx = mesh->indices[indexOffset + j];
-      faceVerts[j].pos = {mesh->positions[3 * idx.p + 0],
-                          mesh->positions[3 * idx.p + 1],
-                          mesh->positions[3 * idx.p + 2]};
 
-      // Random-ish color based on face index to see geometry clearly
-      float intensity = 0.5f + 0.5f * (float)(i % 10) / 10.0f;
-      faceVerts[j].color = {intensity, intensity * 0.8f, intensity * 0.6f};
+      Vertex v{};
+      v.pos = {mesh->positions[3 * idx.p + 0], mesh->positions[3 * idx.p + 1],
+               mesh->positions[3 * idx.p + 2]};
+
+      v.color = {1.0f, 1.0f, 1.0f};
 
       if (idx.n) {
-        faceVerts[j].normal = {mesh->normals[3 * idx.n + 0],
-                               mesh->normals[3 * idx.n + 1],
-                               mesh->normals[3 * idx.n + 2]};
+        v.normal = {mesh->normals[3 * idx.n + 0], mesh->normals[3 * idx.n + 1],
+                    mesh->normals[3 * idx.n + 2]};
       } else {
-        faceVerts[j].normal = computedNormal; // Default if missing
+        v.normal = {0.0f, 0.0f, 1.0f};
       }
 
-      if (mesh->color_count > 0) {
-        faceVerts[j].color = {mesh->colors[3 * idx.p + 0],
-                              mesh->colors[3 * idx.p + 1],
-                              mesh->colors[3 * idx.p + 2]};
+      if (mesh->texcoord_count > 0 && idx.t) {
+        v.texCoord = {mesh->texcoords[2 * idx.t + 0],
+                      1.0f - mesh->texcoords[2 * idx.t + 1]};
+      } else {
+        v.texCoord = {0.0f, 0.0f};
       }
 
-      if (mesh->texcoord_count > 0) {
-        faceVerts[j].texCoord = {
-            mesh->texcoords[2 * idx.t + 0],
-            1.0f - mesh->texcoords[2 * idx.t + 1] // Invert V for Vulkan
-        };
-      } else {
-        faceVerts[j].texCoord = {0.0f, 0.0f};
-      }
+      v.tangent = {0.0f, 0.0f, 0.0f, 1.0f};
+      faceVerts[j] = v;
     }
 
     // Fan triangulation
     for (unsigned int j = 1; j < verticesInFace - 1; ++j) {
-      uint32_t baseIdx = static_cast<uint32_t>(outVertices.size());
+      Vertex &v0 = faceVerts[0];
+      Vertex &v1 = faceVerts[j];
+      Vertex &v2 = faceVerts[j + 1];
 
-      outVertices.push_back(faceVerts[0]);
-      outVertices.push_back(faceVerts[j]);
-      outVertices.push_back(faceVerts[j + 1]);
+      glm::vec3 edge1 = v1.pos - v0.pos;
+      glm::vec3 edge2 = v2.pos - v0.pos;
 
-      outIndices.push_back(baseIdx);
-      outIndices.push_back(baseIdx + 1);
-      outIndices.push_back(baseIdx + 2);
+      glm::vec2 deltaUV1 = v1.texCoord - v0.texCoord;
+      glm::vec2 deltaUV2 = v2.texCoord - v0.texCoord;
+
+      float denom = deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y;
+      float f = (std::abs(denom) > 1e-8f) ? (1.0f / denom) : 0.0f;
+
+      glm::vec3 tangent(f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x),
+                        f * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y),
+                        f * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z));
+
+      tangent = safeNormalize(tangent);
+      if (glm::dot(tangent, tangent) <= 1e-20f) {
+        tangent = {1.0f, 0.0f, 0.0f};
+      }
+
+      v0.tangent = {tangent.x, tangent.y, tangent.z, 1.0f};
+      v1.tangent = {tangent.x, tangent.y, tangent.z, 1.0f};
+      v2.tangent = {tangent.x, tangent.y, tangent.z, 1.0f};
+
+      Vertex *tri[3] = {&v0, &v1, &v2};
+      for (int k = 0; k < 3; ++k) {
+        auto it = uniqueVertices.find(*tri[k]);
+        if (it == uniqueVertices.end()) {
+          uint32_t newIndex = static_cast<uint32_t>(outVertices.size());
+          uniqueVertices.emplace(*tri[k], newIndex);
+          outVertices.push_back(*tri[k]);
+          outIndices.push_back(newIndex);
+        } else {
+          outIndices.push_back(it->second);
+        }
+      }
     }
 
     indexOffset += verticesInFace;
