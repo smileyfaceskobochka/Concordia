@@ -1,17 +1,18 @@
 #include "asset_manager.h"
-#include <stdexcept>
-#define GLM_ENABLE_EXPERIMENTAL
 #include <SDL3/SDL.h>
-#include <stb_image.h>
-#define CGLTF_IMPLEMENTATION
-#include "../forma/material.h"
-#include "../mundus/scene.h"
 #include <cgltf.h>
 #include <filesystem>
+#include <forma/material.h>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <iostream>
+#include <mundus/scene.h>
+#include <stb_image.h>
+#include <stdexcept>
+
+#define GLM_ENABLE_EXPERIMENTAL
+#define CGLTF_IMPLEMENTATION
 
 namespace Memoria {
 

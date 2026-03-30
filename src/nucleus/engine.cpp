@@ -5,26 +5,18 @@
 #include "lumen/shader_registry.h"
 #include "mundus/scene.h"
 #include "vista/camera.h"
-#define GLM_ENABLE_EXPERIMENTAL
 #include <SDL3/SDL.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <iostream>
+#include <render/vk_check.h>
 #include <stdexcept>
 #include <string>
 #include <vk_mem_alloc.h>
 
-#define VK_CHECK(call)                                                         \
-  do {                                                                         \
-    VkResult _r = (call);                                                      \
-    if (_r != VK_SUCCESS) {                                                    \
-      SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,                               \
-                   "Vulkan error %d at " __FILE__ ":%d", _r, __LINE__);        \
-      throw std::runtime_error("Vulkan call failed in Nucleus::Engine");       \
-    }                                                                          \
-  } while (0)
+#define GLM_ENABLE_EXPERIMENTAL
 
 struct PushConstants {
   glm::mat4 model;
@@ -122,8 +114,7 @@ Engine::~Engine() {
 void Engine::initPipeline() {
   m_shaderRegistry = std::make_unique<Lumen::ShaderRegistry>();
 
-  // Blinn-Phong Pipeline
-  {
+  { // Blinn-Phong Pipeline
     Lumen::PipelineConfig config{};
     config.vertexShaderPath =
         std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/vert.spv";

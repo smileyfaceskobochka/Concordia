@@ -76,7 +76,7 @@ void main() {
     vec4 albedoTex = texture(albedoMap, fragTexCoord);
     vec3 albedo = albedoTex.rgb * pc.baseColor.rgb;
 
-    vec2 mr = texture(metallicRoughnessMap, fragTexCoord).gb; // ✅ FIXED
+    vec2 mr = texture(metallicRoughnessMap, fragTexCoord).gb;
     float roughness = clamp(mr.x * pc.roughness, 0.04, 1.0);
     float metallic  = clamp(mr.y * pc.metallic,  0.0, 1.0);
 
@@ -142,7 +142,7 @@ void main() {
 
     vec3 specIBL =
         prefiltered *
-        (F_ibl * brdf.x + vec3(brdf.y)); // ✅ FIXED
+        (F_ibl * brdf.x + vec3(brdf.y));
 
     vec3 ambient = (kD * diffuse + specIBL) * ao;
 

@@ -185,4 +185,8 @@ The material system is no longer gaslighting me. GLTF PBR is now functionally co
   * Losing the **bitangent sign**
 * Shader expected `fragTangent.w` → got garbage → **broken TBN matrix → lighting artifacts / black shading**
 
+![26.03.26](./26_03_26.png)
+
 > 💡 **Future Me:** Check out JoltPhysics when you're ready.
+
+> 💡 **Future Me:** Check out [cmrc](https://github.com/vector-of-bool/cmrc) for embedding assets in the engine executable (like Godot).

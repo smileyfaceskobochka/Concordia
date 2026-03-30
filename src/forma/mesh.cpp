@@ -1,7 +1,6 @@
 #include "mesh.h"
-#include "fast_obj.h"
-
 #include <cmath>
+#include <fast_obj.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>

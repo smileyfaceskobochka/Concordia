@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../forma/material.h"
-#include "../memoria/asset_manager.h"
+#include "forma/material.h"
+#include "memoria/asset_manager.h"
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>

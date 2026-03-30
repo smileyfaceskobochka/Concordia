@@ -1,8 +1,9 @@
-#define VMA_IMPLEMENTATION
 #include "allocator.h"
 #include <cstring>
 #include <stdexcept>
 #include <vector>
+
+#define VMA_IMPLEMENTATION
 
 namespace Memoria {
 
@@ -245,7 +246,7 @@ void Allocator::generateMipmaps(VkImage image, VkFormat format,
   if (!(formatProperties.optimalTilingFeatures &
         VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
     throw std::runtime_error(
-        "texture image format does not support linear blitting!");
+        "texture image format does not support linear bitting!");
   }
 
   VkCommandBufferAllocateInfo allocInfo{

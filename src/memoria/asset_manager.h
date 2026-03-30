@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../forma/mesh.h"
 #include "allocator.h"
+#include <forma/mesh.h>
 #include <string>
 #include <vk_mem_alloc.h>
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "../memoria/asset_manager.h"
+#include "memoria/asset_manager.h"
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
