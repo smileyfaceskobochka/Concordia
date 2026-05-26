@@ -12,62 +12,52 @@ class Scene;
 #include <unordered_map>
 #include <vector>
 
+#include "types.h"
+
 namespace Memoria {
-
-struct MeshAsset {
-  VkBuffer vertexBuffer = VK_NULL_HANDLE;
-  VmaAllocation vertexAllocation = VK_NULL_HANDLE;
-  uint32_t vertexCount = 0;
-
-  VkBuffer indexBuffer = VK_NULL_HANDLE;
-  VmaAllocation indexAllocation = VK_NULL_HANDLE;
-  uint32_t indexCount = 0;
-
-  void destroy(Allocator &allocator) {
-    if (vertexBuffer)
-      allocator.destroyBuffer(vertexBuffer, vertexAllocation);
-    if (indexBuffer)
-      allocator.destroyBuffer(indexBuffer, indexAllocation);
-  }
-};
-
-struct TextureAsset {
-  VkImage image = VK_NULL_HANDLE;
-  VmaAllocation allocation = VK_NULL_HANDLE;
-  VkImageView view = VK_NULL_HANDLE;
-
-  void destroy(Allocator &allocator, VkDevice device) {
-    if (view)
-      vkDestroyImageView(device, view, nullptr);
-    if (image)
-      allocator.destroyImage(image, allocation);
-  }
-};
 
 class AssetManager {
 public:
+  struct SkyboxAsset {
+    std::string name;
+    std::string path;
+    bool isHDR = false;
+  };
+
   AssetManager(Allocator &allocator, VkDevice device, VkQueue transferQueue,
                VkCommandPool transferPool);
   ~AssetManager();
 
-  std::shared_ptr<MeshAsset> loadMesh(const std::string &path,
-                                      bool createCubeFallback = false);
+  std::shared_ptr<MeshAsset> createCubeMesh();
   std::shared_ptr<TextureAsset> loadTexture(const std::string &path,
-                                            bool srgb = true);
+                                             bool srgb = true);
   std::shared_ptr<TextureAsset> loadTextureFromMemory(const unsigned char *data,
-                                                      size_t size,
-                                                      const std::string &name,
-                                                      bool srgb = true);
+                                                       size_t size,
+                                                       const std::string &name,
+                                                       bool srgb = true);
   std::shared_ptr<TextureAsset> loadCubemap(const std::string &directoryPath);
   std::shared_ptr<TextureAsset> loadCubemapFromCross(const std::string &path);
+  std::shared_ptr<TextureAsset> loadHDR(const std::string &path);
+
+  std::vector<SkyboxAsset> scanSkyboxes() const;
+
+  // Mesh and texture resolution (resolve phase)
+  std::shared_ptr<MeshAsset> getMesh(const std::string &source);
+  std::shared_ptr<TextureAsset> resolveTexture(const std::string &source, bool srgb);
 
   // GLTF Support
   void loadGLTF(const std::string &path, Mundus::Scene &scene,
                 int parentIndex = -1);
 
+  const std::vector<std::shared_ptr<TextureAsset>> &getLoadedTextures() const {
+    return m_textureLinearStore;
+  }
+
   // Default textures for PBR fallbacks
-  std::shared_ptr<TextureAsset> getDefaultWhite() { return m_defaultWhite; }
-  std::shared_ptr<TextureAsset> getDefaultBlack() { return m_defaultBlack; }
+  std::shared_ptr<TextureAsset> getDefaultWhite() { return m_defaultWhiteSRGB; }
+  std::shared_ptr<TextureAsset> getDefaultWhiteLinear() { return m_defaultWhiteLinear; }
+  std::shared_ptr<TextureAsset> getDefaultBlack() { return m_defaultBlackSRGB; }
+  std::shared_ptr<TextureAsset> getDefaultBlackLinear() { return m_defaultBlackLinear; }
   std::shared_ptr<TextureAsset> getDefaultNormal() { return m_defaultNormal; }
   std::shared_ptr<TextureAsset> getDefaultBRDF() { return m_defaultBRDF; }
 
@@ -83,13 +73,17 @@ private:
   VkQueue m_transferQueue;
   VkCommandPool m_transferPool;
 
-  std::shared_ptr<TextureAsset> m_defaultWhite;
-  std::shared_ptr<TextureAsset> m_defaultBlack;
+  std::shared_ptr<TextureAsset> m_defaultWhiteSRGB;
+  std::shared_ptr<TextureAsset> m_defaultWhiteLinear;
+  std::shared_ptr<TextureAsset> m_defaultBlackSRGB;
+  std::shared_ptr<TextureAsset> m_defaultBlackLinear;
   std::shared_ptr<TextureAsset> m_defaultNormal;
   std::shared_ptr<TextureAsset> m_defaultBRDF;
 
   std::unordered_map<std::string, std::shared_ptr<MeshAsset>> m_meshes;
   std::unordered_map<std::string, std::shared_ptr<TextureAsset>> m_textures;
+  std::vector<std::shared_ptr<MeshAsset>> m_meshStore;
+  std::vector<std::shared_ptr<TextureAsset>> m_textureLinearStore;
 };
 
 } // namespace Memoria

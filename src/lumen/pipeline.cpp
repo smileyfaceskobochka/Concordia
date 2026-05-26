@@ -86,7 +86,7 @@ void Pipeline::init(const Render::Context &context,
 
   VkPushConstantRange pcr{};
   if (config.pushConstantSize > 0) {
-    pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pcr.size = config.pushConstantSize;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &pcr;

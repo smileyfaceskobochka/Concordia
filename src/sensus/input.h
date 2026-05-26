@@ -6,6 +6,8 @@
 
 namespace Sensus {
 
+enum class MouseButton { Left, Middle, Right };
+
 class Input {
 public:
     Input() = default;
@@ -20,6 +22,8 @@ public:
     // State queries
     bool isKeyPressed(SDL_Keycode key) const;
     glm::vec2 getMouseDelta() const;
+    bool isMousePressed(MouseButton btn) const;
+    glm::vec2 getMousePos() const { return m_mousePos; }
 
     // Mouse capture state
     void setCapture(bool captured, SDL_Window* window);
@@ -27,7 +31,9 @@ public:
 
 private:
     std::unordered_map<SDL_Keycode, bool> m_keys;
+    bool m_mouseButtons[3] = {};
     glm::vec2 m_mouseDelta{0.0f, 0.0f};
+    glm::vec2 m_mousePos{0.0f, 0.0f};
     bool m_captured = false;
 };
 

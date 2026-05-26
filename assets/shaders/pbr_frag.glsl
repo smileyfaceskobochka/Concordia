@@ -36,6 +36,7 @@ layout(push_constant) uniform PushConstants {
     uint mrIdx;
     uint aoIdx;
     uint emissiveIdx;
+    uint debugMode;
 } pc;
 
 const float PI = 3.14159265359;
@@ -86,19 +87,22 @@ void main() {
     float ao = texture(globalTextures[nonuniformEXT(pc.aoIdx)], fragTexCoord).r;
     vec3 emissive = texture(globalTextures[nonuniformEXT(pc.emissiveIdx)], fragTexCoord).rgb;
 
-    // --- NORMAL MAPPING ---
+    // --- NORMALS ---
 
     vec3 N = normalize(fragNormal);
 
-    vec3 T = normalize(fragTangent.xyz);
-    T = normalize(T - dot(T, N) * N);
+    // Guard: only apply normal map if TBN is well-formed
+    // (T parallel to N produces degenerate TBN after Gram-Schmidt)
+    vec3 Traw = normalize(fragTangent.xyz);
+    float TdotN = dot(Traw, N);
+    if (abs(TdotN) < 0.9999) {
+        vec3 T = normalize(Traw - TdotN * N);
+        vec3 B = normalize(cross(N, T)) * fragTangent.w;
+        mat3 TBN = mat3(T, B, N);
+        vec3 tangentNormal = texture(globalTextures[nonuniformEXT(pc.normalIdx)], fragTexCoord).xyz * 2.0 - 1.0;
+        N = normalize(TBN * tangentNormal);
+    }
 
-    vec3 B = normalize(cross(N, T)) * fragTangent.w;
-
-    mat3 TBN = mat3(T, B, N);
-
-    vec3 tangentNormal = texture(globalTextures[nonuniformEXT(pc.normalIdx)], fragTexCoord).xyz * 2.0 - 1.0;
-    N = normalize(TBN * tangentNormal);
 
     // --- VIEW ---
 
@@ -127,27 +131,26 @@ void main() {
     float NdotL = max(dot(N, L), 0.0);
     vec3 Lo = (kD * albedo / PI + spec) * radiance * NdotL;
 
-    // --- IBL ---
+    // --- DEBUG: visualize material values ---
+    if (pc.debugMode == 1) { outColor = vec4(vec3(metallic), 1.0); return; }
+    if (pc.debugMode == 2) { outColor = vec4(vec3(roughness), 1.0); return; }
+    if (pc.debugMode == 3) { outColor = vec4(N * 0.5 + 0.5, 1.0); return; }
+    if (pc.debugMode == 4) { outColor = vec4(fragColor, 1.0); return; }
+ 
+    // --- AMBIENT (IBL) ---
+    vec3 F_ibl = fresnelSchlickRoughness(max(dot(N, V), 0.0), F0, roughness);
 
-    vec3 F_ibl = fresnelSchlickRoughness(
-        max(dot(N, V), 0.0), F0, roughness);
-
+    // Diffuse IBL: sample irradiance cubemap along the normal
     vec3 irradiance = texture(irradianceMap, N).rgb;
     vec3 diffuse = irradiance * albedo;
 
-    float MAX_LOD = 6.0;
-    vec3 prefiltered =
-        textureLod(prefilterMap, R, roughness * MAX_LOD).rgb;
+    // Specular IBL: split-sum approximation
+    const float MAX_REFLECTION_LOD = 4.0;
+    vec3 prefilteredColor = textureLod(prefilterMap, R, roughness * MAX_REFLECTION_LOD).rgb;
+    vec2 brdf = texture(brdfLUT, vec2(roughness, max(dot(N, V), 0.0))).rg;
+    vec3 specular = prefilteredColor * (F_ibl * brdf.x + brdf.y);
 
-    vec2 brdf =
-        texture(brdfLUT,
-        vec2(max(dot(N, V), 0.0), roughness)).rg;
-
-    vec3 specIBL =
-        prefiltered *
-        (F_ibl * brdf.x + vec3(brdf.y));
-
-    vec3 ambient = (kD * diffuse + specIBL) * ao;
+    vec3 ambient = (kD * diffuse + specular) * ao;
 
     // --- FINAL ---
 

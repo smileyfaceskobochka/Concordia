@@ -18,7 +18,8 @@ public:
 
   void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                     VmaMemoryUsage memoryUsage, VkBuffer &outBuffer,
-                    VmaAllocation &outAllocation);
+                    VmaAllocation &outAllocation,
+                    VmaAllocationCreateFlags flags = 0);
   void destroyBuffer(VkBuffer buffer, VmaAllocation allocation);
   void destroyImage(VkImage image, VmaAllocation allocation);
 
@@ -27,10 +28,11 @@ public:
                   VkDevice device);
 
   void createImage(uint32_t width, uint32_t height, VkFormat format,
-                   VkImageTiling tiling, VkImageUsageFlags usage,
-                   VmaMemoryUsage memoryUsage, VkImage &outImage,
-                   VmaAllocation &outAllocation, uint32_t layerCount = 1,
-                   VkImageCreateFlags flags = 0, uint32_t mipLevels = 1);
+                    VkImageTiling tiling, VkImageUsageFlags usage,
+                    VmaMemoryUsage memoryUsage, VkImage &outImage,
+                    VmaAllocation &outAllocation, uint32_t layerCount = 1,
+                    VkImageCreateFlags flags = 0, uint32_t mipLevels = 1,
+                    VmaAllocationCreateFlags allocFlags = 0);
 
   void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width,
                          uint32_t height, VkQueue transferQueue,

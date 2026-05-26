@@ -22,6 +22,11 @@ layout(push_constant) uniform PushConstants {
     vec4 baseColor;
     float roughness;
     float metallic;
+    uint albedoIdx;
+    uint normalIdx;
+    uint mrIdx;
+    uint aoIdx;
+    uint emissiveIdx;
 } pc;
 
 void main() {

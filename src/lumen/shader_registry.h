@@ -19,6 +19,7 @@ public:
   void registerPipeline(const std::string &name,
                         std::shared_ptr<Pipeline> pipeline);
   std::shared_ptr<Pipeline> getPipeline(const std::string &name) const;
+  std::vector<std::string> getPipelineNames() const;
 
   void destroy(VkDevice device);
 

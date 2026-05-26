@@ -12,7 +12,7 @@ Context::Context(const Petra::Window &window) {
 
   vkb::InstanceBuilder builder;
   builder.set_app_name("Concordia")
-      .require_api_version(1, 1, 0)
+      .require_api_version(1, 2, 0)
       .request_validation_layers(true)
       .use_default_debug_messenger();
   for (Uint32 i = 0; i < extCount; ++i) {
@@ -33,8 +33,19 @@ Context::Context(const Petra::Window &window) {
   }
 
   // Physical Device
+  VkPhysicalDeviceVulkan12Features features12{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+  features12.descriptorIndexing = VK_TRUE;
+  features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+  features12.descriptorBindingPartiallyBound = VK_TRUE;
+  features12.runtimeDescriptorArray = VK_TRUE;
+  features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+
   vkb::PhysicalDeviceSelector sel{m_vkbInst};
-  auto physRet = sel.set_surface(m_surface).set_minimum_version(1, 1).select();
+  auto physRet = sel.set_surface(m_surface)
+                     .set_minimum_version(1, 2)
+                     .set_required_features_12(features12)
+                     .select();
   if (!physRet) {
     throw std::runtime_error("PhysDevice: " + physRet.error().message());
   }
@@ -165,7 +176,7 @@ void Context::initDepthBuffer(VmaAllocator allocator) {
   ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
   VmaAllocationCreateInfo aci{};
-  aci.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+  aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
   aci.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
   VK_CHECK(vmaCreateImage(allocator, &ici, &aci, &m_depthImage,

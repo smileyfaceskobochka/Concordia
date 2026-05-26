@@ -1,0 +1,51 @@
+scene:
+  light_dir: "@vec3(-0.5,-1,-0.2)"
+  light_color: "@vec3(1,1,1)"
+  entities[4]:
+    - id: Skybox
+      visible: true
+      transform:
+        scale: "@vec3(10,10,10)"
+      mesh: @primitive(cube)
+      material:
+        shader: skybox
+        base_color: "@vec4(1,1,1,1)"
+        roughness: 0.5
+        metallic: 0
+    - id: node_damagedHelmet_-6514
+      visible: true
+      transform:
+        rot: "@vec3(1.5708,0,0)"
+      mesh: @asset(models/gltf/DamagedHelmet.glb)
+      material:
+        shader: pbr
+        base_color: "@vec4(1,1,1,1)"
+        roughness: 1
+        metallic: 1
+        albedo: embedded_img_0
+        normal: embedded_img_4
+        metallic_roughness: embedded_img_1
+        ao: embedded_img_3
+        emissive: embedded_img_2
+    - id: Cube
+      visible: true
+      mesh: @asset(models/gltf/cube.glb)
+      material:
+        shader: pbr
+        base_color: "@vec4(1,1,1,1)"
+        roughness: 0.5
+        metallic: 0
+        albedo: CubeTexture
+    - id: ChildCube
+      visible: true
+      parent: Cube
+      transform:
+        pos: "@vec3(-1.5,0,0)"
+        scale: "@vec3(0.5,0.5,0.5)"
+      mesh: @asset(models/gltf/cube.glb)
+      material:
+        shader: pbr
+        base_color: "@vec4(1,1,1,1)"
+        roughness: 0.5
+        metallic: 0
+        albedo: CubeTexture

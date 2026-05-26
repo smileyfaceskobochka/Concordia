@@ -7,6 +7,14 @@ void ShaderRegistry::registerPipeline(const std::string &name,
   m_pipelines[name] = pipeline;
 }
 
+std::vector<std::string> ShaderRegistry::getPipelineNames() const {
+  std::vector<std::string> names;
+  names.reserve(m_pipelines.size());
+  for (auto &pair : m_pipelines)
+    names.push_back(pair.first);
+  return names;
+}
+
 std::shared_ptr<Pipeline>
 ShaderRegistry::getPipeline(const std::string &name) const {
   auto it = m_pipelines.find(name);

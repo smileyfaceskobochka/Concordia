@@ -171,22 +171,44 @@ The engine gains a sky. The engine gains physically-based materials. The engine 
 ---
 
 ## 📅 Dev-Log Entry: 26.03.26 - PBR Actually Works (No Really This Time)
-
+ 
 The material system is no longer gaslighting me. GLTF PBR is now functionally correct, and the engine finally renders assets that look like they belong.
-
+ 
 <small>It was not Vulkan. It was never Vulkan.</small>
-
+ 
 ### What Achieved
-
+ 
 #### 1. GLTF PBR - FIXED 
 * **Root cause:** Tangent data mismatch + missing handedness (`w`) component.
 * GLTF provides tangents as **vec4 (xyz + handedness)**, but the engine was:
   * Uploading only **vec3**
   * Losing the **bitangent sign**
 * Shader expected `fragTangent.w` → got garbage → **broken TBN matrix → lighting artifacts / black shading**
-
+ 
 ![26.03.26](./26_03_26.png)
-
+ 
 > 💡 **Future Me:** Check out JoltPhysics when you're ready.
-
+ 
 > 💡 **Future Me:** Check out [cmrc](https://github.com/vector-of-bool/cmrc) for embedding assets in the engine executable (like Godot).
+ 
+---
+ 
+## 📅 Dev‑Log Entry: 26.05.26 - The Purge & Debugging
+ 
+The engine continues to evolve, moving towards a stricter, more modern asset pipeline and providing the tools needed to stop guessing what's happening in the fragment shader.
+ 
+### What Achieved
+ 
+#### 1. Render Debugging Tools (`Vigil`)
+* Integrated a "Debug View" selector into the Scene Inspector.
+* Enabled real-time visualization of PBR channels: **Metallic**, **Roughness**, **Normals**, and **Vertex Color**.
+* Wired this through Push Constants to allow instant toggling without shader recompilation.
+ 
+#### 2. The Great OBJ Purge
+* Completely ripped out the legacy OBJ import pipeline.
+* Deleted all `.obj` assets.
+* **Standardization:** GLTF/GLB is now the exclusive geometric standard. OBJ is heresy.
+ 
+#### 3. Engine Noise Reduction
+* Purged per-frame `drawFrame` logs that were flooding the console.
+* Refined GLTF normal loading and verification.

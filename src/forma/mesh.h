@@ -9,11 +9,11 @@
 namespace Forma {
 
 struct Vertex {
-  glm::vec3 pos;
-  glm::vec3 color;
-  glm::vec3 normal;
-  glm::vec2 texCoord;
-  glm::vec4 tangent;
+  glm::vec3 pos{0.0f};
+  glm::vec3 color{1.0f};
+  glm::vec3 normal{0.0f, 0.0f, 1.0f};
+  glm::vec2 texCoord{0.0f};
+  glm::vec4 tangent{1.0f, 0.0f, 0.0f, 1.0f};
 
   static VkVertexInputBindingDescription getBindingDescription();
   static std::vector<VkVertexInputAttributeDescription>
@@ -35,9 +35,6 @@ struct Mesh {
   uint32_t indexCount = 0;
 
   static void createCube(std::vector<Vertex> &outVertices,
-                         std::vector<uint32_t> &outIndices);
-  static void loadFromOBJ(const std::string &path,
-                          std::vector<Vertex> &outVertices,
                           std::vector<uint32_t> &outIndices);
 };
 

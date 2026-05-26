@@ -19,7 +19,7 @@ void Sampler::init(VkDevice device) {
   samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
   samplerInfo.mipLodBias = 0.0f;
   samplerInfo.minLod = 0.0f;
-  samplerInfo.maxLod = 0.0f;
+  samplerInfo.maxLod = VK_LOD_CLAMP_NONE; // allow all mip levels
 
   if (vkCreateSampler(device, &samplerInfo, nullptr, &m_sampler) !=
       VK_SUCCESS) {

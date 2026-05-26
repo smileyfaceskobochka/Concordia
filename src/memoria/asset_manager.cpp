@@ -1,18 +1,19 @@
+#define GLM_ENABLE_EXPERIMENTAL
 #include "asset_manager.h"
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <cgltf.h>
 #include <filesystem>
 #include <forma/material.h>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <iostream>
 #include <mundus/scene.h>
 #include <stb_image.h>
 #include <stdexcept>
-
-#define GLM_ENABLE_EXPERIMENTAL
-#define CGLTF_IMPLEMENTATION
+#include <vk_mem_alloc.h>
 
 namespace Memoria {
 
@@ -21,8 +22,10 @@ AssetManager::AssetManager(Allocator &allocator, VkDevice device,
     : m_allocator(allocator), m_device(device), m_transferQueue(transferQueue),
       m_transferPool(transferPool) {
 
-  m_defaultWhite = createSolidTexture(255, 255, 255, 255, true);
-  m_defaultBlack = createSolidTexture(0, 0, 0, 255, true);
+  m_defaultWhiteSRGB = createSolidTexture(255, 255, 255, 255, true);
+  m_defaultWhiteLinear = createSolidTexture(255, 255, 255, 255, false);
+  m_defaultBlackSRGB = createSolidTexture(0, 0, 0, 255, true);
+  m_defaultBlackLinear = createSolidTexture(0, 0, 0, 255, false);
   m_defaultNormal = createSolidTexture(128, 128, 255, 255, false);
   m_defaultBRDF = createSolidTexture(255, 0, 0, 255, false);
 }
@@ -35,100 +38,73 @@ AssetManager::createSolidTexture(unsigned char r, unsigned char g,
 }
 
 AssetManager::~AssetManager() {
-  for (auto &pair : m_meshes) {
-    pair.second->destroy(m_allocator);
+  for (auto &mesh : m_meshStore) {
+    mesh->destroy(m_allocator);
   }
-  for (auto &pair : m_textures) {
-    pair.second->destroy(m_allocator, m_device);
+  for (auto &tex : m_textureLinearStore) {
+    tex->destroy(m_allocator, m_device);
   }
 }
 
-std::shared_ptr<MeshAsset> AssetManager::loadMesh(const std::string &path,
-                                                  bool createCubeFallback) {
-  if (m_meshes.find(path) != m_meshes.end()) {
-    return m_meshes[path];
-  }
-
+std::shared_ptr<MeshAsset> AssetManager::createCubeMesh() {
   std::vector<Forma::Vertex> vertices;
   std::vector<uint32_t> indices;
-
-  SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-              "AssetManager: Requesting load of mesh from %s", path.c_str());
-
-  bool success = false;
-  try {
-    Forma::Mesh::loadFromOBJ(path, vertices, indices);
-    success = true;
-  } catch (...) {
-    if (!createCubeFallback) {
-      throw std::runtime_error("AssetManager failed to load mesh: " + path);
-    }
-    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                "AssetManager: OBJ load failed or file not found, creating "
-                "procedural cube for %s",
-                path.c_str());
-    Forma::Mesh::createCube(vertices, indices);
-  }
-
+  Forma::Mesh::createCube(vertices, indices);
+ 
   auto mesh = std::make_shared<MeshAsset>();
   mesh->vertexCount = static_cast<uint32_t>(vertices.size());
   mesh->indexCount = static_cast<uint32_t>(indices.size());
-
+ 
   size_t vSize = vertices.size() * sizeof(Forma::Vertex);
   size_t iSize = indices.size() * sizeof(uint32_t);
-
-  // Upload Vertex Buffer
-  {
-    VkBuffer stagingBuffer;
-    VmaAllocation stagingAlloc;
-    m_allocator.createBuffer(vSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                             VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                             stagingAlloc);
-
-    void *data;
-    vmaMapMemory(m_allocator.getVma(), stagingAlloc, &data);
-    memcpy(data, vertices.data(), vSize);
+ 
+  VkBuffer stagingBuffer;
+  VmaAllocation stagingAlloc;
+  m_allocator.createBuffer(vSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                           VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                           stagingAlloc,
+                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+  void *p;
+  vmaMapMemory(m_allocator.getVma(), stagingAlloc, &p);
+  memcpy(p, vertices.data(), vSize);
+  vmaUnmapMemory(m_allocator.getVma(), stagingAlloc);
+  m_allocator.createBuffer(vSize,
+                           VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                               VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                           VMA_MEMORY_USAGE_GPU_ONLY,
+                           mesh->vertexBuffer,
+                           mesh->vertexAllocation);
+  m_allocator.copyBuffer(stagingBuffer, mesh->vertexBuffer, vSize,
+                        m_transferQueue, m_transferPool, m_device);
+  m_allocator.destroyBuffer(stagingBuffer, stagingAlloc);
+ 
+  if (!indices.empty()) {
+    size_t iSize_buf = indices.size() * sizeof(uint32_t);
+    m_allocator.createBuffer(iSize_buf, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                             stagingAlloc,
+                             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+    vmaMapMemory(m_allocator.getVma(), stagingAlloc, &p);
+    memcpy(p, indices.data(), iSize_buf);
     vmaUnmapMemory(m_allocator.getVma(), stagingAlloc);
-
-    m_allocator.createBuffer(
-        vSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        VMA_MEMORY_USAGE_GPU_ONLY, mesh->vertexBuffer, mesh->vertexAllocation);
-    m_allocator.copyBuffer(stagingBuffer, mesh->vertexBuffer, vSize,
+    m_allocator.createBuffer(iSize_buf,
+                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                 VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                             VMA_MEMORY_USAGE_GPU_ONLY,
+                             mesh->indexBuffer,
+                             mesh->indexAllocation);
+    m_allocator.copyBuffer(stagingBuffer, mesh->indexBuffer, iSize_buf,
                            m_transferQueue, m_transferPool, m_device);
-
     m_allocator.destroyBuffer(stagingBuffer, stagingAlloc);
   }
-
-  // Upload Index Buffer
-  {
-    VkBuffer stagingBuffer;
-    VmaAllocation stagingAlloc;
-    m_allocator.createBuffer(iSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                             VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                             stagingAlloc);
-
-    void *data;
-    vmaMapMemory(m_allocator.getVma(), stagingAlloc, &data);
-    memcpy(data, indices.data(), iSize);
-    vmaUnmapMemory(m_allocator.getVma(), stagingAlloc);
-
-    m_allocator.createBuffer(
-        iSize,
-        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        VMA_MEMORY_USAGE_GPU_ONLY, mesh->indexBuffer, mesh->indexAllocation);
-    m_allocator.copyBuffer(stagingBuffer, mesh->indexBuffer, iSize,
-                           m_transferQueue, m_transferPool, m_device);
-
-    m_allocator.destroyBuffer(stagingBuffer, stagingAlloc);
-  }
-
-  m_meshes[path] = mesh;
+ 
+  m_meshStore.push_back(mesh);
+  m_meshes["@primitive(cube)"] = mesh;
   return mesh;
 }
-
+ 
 std::shared_ptr<TextureAsset> AssetManager::loadTexture(const std::string &path,
-                                                        bool srgb) {
+                                                           bool srgb) {
   std::string key = path + (srgb ? "_srgb" : "_linear");
   if (m_textures.count(key))
     return m_textures[key];
@@ -170,11 +146,17 @@ AssetManager::loadTextureFromSTB(unsigned char *pixels, int width, int height,
                                  bool srgb) {
   VkFormat format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
   VkDeviceSize imageSize = width * height * 4;
+
+  // Compute mip levels
+  uint32_t mipLevels = static_cast<uint32_t>(
+      std::floor(std::log2(std::max(width, height)))) + 1;
+
   VkBuffer stagingBuffer;
   VmaAllocation stagingAlloc;
   m_allocator.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                           VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                           stagingAlloc);
+                           VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                           stagingAlloc,
+                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
   void *data;
   vmaMapMemory(m_allocator.getVma(), stagingAlloc, &data);
@@ -182,21 +164,27 @@ AssetManager::loadTextureFromSTB(unsigned char *pixels, int width, int height,
   vmaUnmapMemory(m_allocator.getVma(), stagingAlloc);
 
   auto texture = std::make_shared<TextureAsset>();
+  // TRANSFER_SRC_BIT is required so mip blit can read from each level
   m_allocator.createImage(
       width, height, format, VK_IMAGE_TILING_OPTIMAL,
-      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-      VMA_MEMORY_USAGE_GPU_ONLY, texture->image, texture->allocation);
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+          VK_IMAGE_USAGE_SAMPLED_BIT,
+      VMA_MEMORY_USAGE_GPU_ONLY, texture->image, texture->allocation,
+      1, 0, mipLevels);
 
+  // Transition all mip levels to TRANSFER_DST for the initial upload
   m_allocator.transitionImageLayout(texture->image, format,
                                     VK_IMAGE_LAYOUT_UNDEFINED,
                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                    m_transferQueue, m_transferPool, m_device);
+                                    m_transferQueue, m_transferPool, m_device,
+                                    1, mipLevels);
   m_allocator.copyBufferToImage(stagingBuffer, texture->image, width, height,
                                 m_transferQueue, m_transferPool, m_device);
-  m_allocator.transitionImageLayout(texture->image, format,
-                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                    m_transferQueue, m_transferPool, m_device);
+
+  // generateMipmaps transitions each level to SHADER_READ_ONLY when done
+  m_allocator.generateMipmaps(texture->image, format, width, height,
+                              mipLevels, m_transferQueue, m_transferPool,
+                              m_device);
 
   m_allocator.destroyBuffer(stagingBuffer, stagingAlloc);
 
@@ -206,7 +194,7 @@ AssetManager::loadTextureFromSTB(unsigned char *pixels, int width, int height,
   viewInfo.format = format;
   viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.levelCount = mipLevels;
   viewInfo.subresourceRange.baseArrayLayer = 0;
   viewInfo.subresourceRange.layerCount = 1;
 
@@ -215,6 +203,12 @@ AssetManager::loadTextureFromSTB(unsigned char *pixels, int width, int height,
     throw std::runtime_error(
         "AssetManager: Failed to create texture image view");
   }
+
+  texture->textureId = static_cast<uint32_t>(m_textureLinearStore.size());
+  texture->width = width;
+  texture->height = height;
+  texture->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  m_textureLinearStore.push_back(texture);
 
   return texture;
 }
@@ -249,8 +243,9 @@ AssetManager::loadCubemap(const std::string &directoryPath) {
   VkBuffer stagingBuffer;
   VmaAllocation stagingAlloc;
   m_allocator.createBuffer(totalSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                           VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                           stagingAlloc);
+                           VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                           stagingAlloc,
+                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
   void *mappedData;
   vmaMapMemory(m_allocator.getVma(), stagingAlloc, &mappedData);
@@ -354,8 +349,9 @@ AssetManager::loadCubemapFromCross(const std::string &path) {
   VkBuffer stagingBuffer;
   VmaAllocation stagingAlloc;
   m_allocator.createBuffer(totalByteSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                           VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                           stagingAlloc);
+                           VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                           stagingAlloc,
+                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
   void *mappedData;
   vmaMapMemory(m_allocator.getVma(), stagingAlloc, &mappedData);
@@ -450,6 +446,119 @@ AssetManager::loadCubemapFromCross(const std::string &path) {
   return cubemap;
 }
 
+std::shared_ptr<TextureAsset>
+AssetManager::loadHDR(const std::string &path) {
+  if (m_textures.find(path) != m_textures.end()) {
+    return m_textures[path];
+  }
+
+  int w, h, c;
+  float *hdrPixels = stbi_loadf(path.c_str(), &w, &h, &c, 4);
+  if (!hdrPixels) {
+    throw std::runtime_error("AssetManager: Failed to load HDR: " + path);
+  }
+
+  VkDeviceSize imageSize = static_cast<VkDeviceSize>(w) * h * 4 * sizeof(float);
+
+  VkBuffer stagingBuffer;
+  VmaAllocation stagingAlloc;
+  m_allocator.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                           VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                           stagingAlloc,
+                           VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+
+  void *data;
+  vmaMapMemory(m_allocator.getVma(), stagingAlloc, &data);
+  memcpy(data, hdrPixels, static_cast<size_t>(imageSize));
+  vmaUnmapMemory(m_allocator.getVma(), stagingAlloc);
+  stbi_image_free(hdrPixels);
+
+  auto texture = std::make_shared<TextureAsset>();
+  m_allocator.createImage(
+      w, h, VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      VMA_MEMORY_USAGE_GPU_ONLY, texture->image, texture->allocation,
+      1, 0, 1);
+
+  m_allocator.transitionImageLayout(
+      texture->image, VK_FORMAT_R32G32B32A32_SFLOAT,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      m_transferQueue, m_transferPool, m_device, 1, 1);
+  m_allocator.copyBufferToImage(stagingBuffer, texture->image, w, h,
+                                m_transferQueue, m_transferPool, m_device, 1);
+  m_allocator.transitionImageLayout(
+      texture->image, VK_FORMAT_R32G32B32A32_SFLOAT,
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_transferQueue,
+      m_transferPool, m_device, 1, 1);
+
+  m_allocator.destroyBuffer(stagingBuffer, stagingAlloc);
+
+  VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  viewInfo.image = texture->image;
+  viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  viewInfo.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+  viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  if (vkCreateImageView(m_device, &viewInfo, nullptr, &texture->view) !=
+      VK_SUCCESS) {
+    throw std::runtime_error(
+        "AssetManager: Failed to create HDR texture image view");
+  }
+
+  texture->textureId = static_cast<uint32_t>(m_textureLinearStore.size());
+  texture->width = w;
+  texture->height = h;
+  texture->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  m_textures[path] = texture;
+  m_textureLinearStore.push_back(texture);
+
+  return texture;
+}
+
+std::vector<AssetManager::SkyboxAsset> AssetManager::scanSkyboxes() const {
+  std::vector<SkyboxAsset> results;
+  auto baseDir = std::string(CONCORDIA_ASSETS_DIR) + "/images/skybox";
+
+  auto scanDir = [&](const std::string &subDir, bool isHDR) {
+    std::string dirPath = baseDir + "/" + subDir;
+    if (!std::filesystem::exists(dirPath))
+      return;
+    for (auto &entry : std::filesystem::directory_iterator(dirPath)) {
+      if (!entry.is_regular_file())
+        continue;
+      auto ext = entry.path().extension().string();
+      if (isHDR) {
+        if (ext != ".hdr")
+          continue;
+      } else {
+        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg")
+          continue;
+      }
+      SkyboxAsset asset;
+      asset.name = entry.path().stem().string();
+      asset.path = entry.path().string();
+      asset.isHDR = isHDR;
+      results.push_back(std::move(asset));
+    }
+  };
+
+  scanDir("cubemap", false);
+  scanDir("hdri", true);
+
+  // Sort by name for consistent ordering
+  std::sort(results.begin(), results.end(),
+            [](const SkyboxAsset &a, const SkyboxAsset &b) {
+              return a.name < b.name;
+            });
+
+  return results;
+}
+
 void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
                             int parentIndex) {
   SDL_Log("AssetManager: loadGLTF: parsing %s", path.c_str());
@@ -484,20 +593,31 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
       if (img->uri) {
         return loadTexture(baseDir + "/" + img->uri, srgb);
       } else if (img->buffer_view) {
-        unsigned char *data = (unsigned char *)img->buffer_view->buffer->data +
-                              img->buffer_view->offset;
+        unsigned char *data_ptr = (unsigned char *)img->buffer_view->buffer->data +
+                                  img->buffer_view->offset;
         size_t size = img->buffer_view->size;
-        std::string name =
-            img->name ? img->name
-                      : "embedded_" +
-                            std::to_string(reinterpret_cast<uintptr_t>(img));
-        return loadTextureFromMemory(data, size, name, srgb);
+        size_t imgIdx = img - data->images;
+        std::string name = img->name ? img->name
+                                     : "embedded_img_" + std::to_string(imgIdx);
+        return loadTextureFromMemory(data_ptr, size, name, srgb);
       }
       return nullptr;
     };
 
     auto mat = std::make_shared<Forma::Material>();
     mat->shaderName = "pbr";
+
+    auto textureSource = [&](cgltf_texture_view &view) -> std::string {
+      if (!view.texture || !view.texture->image) return {};
+      cgltf_image *img = view.texture->image;
+      if (img->uri) return baseDir + "/" + img->uri;
+      if (img->buffer_view) {
+        size_t imgIdx = img - data->images;
+        return img->name ? std::string(img->name)
+                         : "embedded_img_" + std::to_string(imgIdx);
+      }
+      return {};
+    };
 
     if (gmat.has_pbr_metallic_roughness) {
       cgltf_pbr_metallic_roughness &pbr = gmat.pbr_metallic_roughness;
@@ -506,33 +626,33 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
       mat->roughness = pbr.roughness_factor;
 
       mat->albedo = loadGLTFTexture(pbr.base_color_texture, true);
+      mat->albedoSource = textureSource(pbr.base_color_texture);
       mat->metallicRoughness =
           loadGLTFTexture(pbr.metallic_roughness_texture, false);
+      mat->metallicRoughnessSource = textureSource(pbr.metallic_roughness_texture);
     }
 
     mat->normal = loadGLTFTexture(gmat.normal_texture, false);
+    mat->normalSource = textureSource(gmat.normal_texture);
     mat->ao = loadGLTFTexture(gmat.occlusion_texture, false);
+    mat->aoSource = textureSource(gmat.occlusion_texture);
     mat->emissive = loadGLTFTexture(gmat.emissive_texture, true);
+    mat->emissiveSource = textureSource(gmat.emissive_texture);
 
+    // Set bindless indices
     // Fallbacks for missing textures
-    if (!mat->albedo) {
-      mat->albedo = getDefaultWhite();
-      SDL_Log("GLTF: Mat %zu: Albedo MISSING (fallback)", i);
-    } else
-      SDL_Log("GLTF: Mat %zu: Albedo LOADED", i);
+    if (!mat->albedo) mat->albedo = getDefaultWhite();
+    if (!mat->normal) mat->normal = getDefaultNormal();
+    if (!mat->metallicRoughness) mat->metallicRoughness = getDefaultWhiteLinear();
+    if (!mat->ao) mat->ao = getDefaultWhiteLinear();
+    if (!mat->emissive) mat->emissive = getDefaultBlack();
 
-    if (!mat->metallicRoughness) {
-      mat->metallicRoughness = getDefaultWhite();
-      SDL_Log("GLTF: Mat %zu: MR MISSING (fallback)", i);
-    } else
-      SDL_Log("GLTF: Mat %zu: MR LOADED", i);
-
-    if (!mat->normal)
-      mat->normal = getDefaultNormal();
-    if (!mat->ao)
-      mat->ao = getDefaultWhite();
-    if (!mat->emissive)
-      mat->emissive = getDefaultBlack();
+    // Set bindless indices (after fallbacks!)
+    mat->albedoIdx = mat->albedo->textureId;
+    mat->normalIdx = mat->normal->textureId;
+    mat->metallicRoughnessIdx = mat->metallicRoughness->textureId;
+    mat->aoIdx = mat->ao->textureId;
+    mat->emissiveIdx = mat->emissive->textureId;
 
     materials.push_back(mat);
   }
@@ -550,6 +670,12 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
     int entityIdx =
         scene.addEntity(node->name ? node->name : "GLTF_Node", parentIdx);
 
+    // Track mesh source for serialization
+    {
+      auto &ent = scene.getEntities()[entityIdx];
+      ent.meshSource = path;
+    }
+
     // Transform (Fetch reference AFTER possibly reallocating in addEntity)
     {
       auto &ent = scene.getEntities()[entityIdx];
@@ -562,9 +688,12 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
         ent.transform.scale = glm::make_vec3(node->scale);
       if (node->has_matrix) {
         glm::mat4 m = glm::make_mat4(node->matrix);
-        ent.transform.position = glm::vec3(m[3]);
-        ent.transform.scale =
-            glm::vec3(glm::length(m[0]), glm::length(m[1]), glm::length(m[2]));
+        glm::vec3 skew;
+        glm::vec4 perspective;
+        glm::quat rotation;
+        glm::decompose(m, ent.transform.scale, rotation, ent.transform.position,
+                       skew, perspective);
+        ent.transform.rotation = glm::eulerAngles(rotation);
       }
     }
 
@@ -575,9 +704,10 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
         int primIdx = entityIdx;
         if (node->mesh->primitives_count > 1) {
           primIdx = scene.addEntity(node->name ? (std::string(node->name) +
-                                                  "_prim" + std::to_string(i))
-                                               : "GLTF_Primitive",
+                                                   "_prim" + std::to_string(i))
+                                                : "GLTF_Primitive",
                                     entityIdx);
+          scene.getEntities()[primIdx].meshSource = path;
         }
 
         // Fetch reference again at the latest possible time
@@ -587,69 +717,127 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
         std::vector<Forma::Vertex> vertices;
         std::vector<uint32_t> indices;
 
-        float *pos = nullptr;
-        size_t posCount = 0;
-        float *norm = nullptr;
-        float *uv = nullptr;
-        float *tangent = nullptr;
+        cgltf_accessor *posAccessor = nullptr;
+        cgltf_accessor *normAccessor = nullptr;
+        cgltf_accessor *uvAccessor = nullptr;
+        cgltf_accessor *tangentAccessor = nullptr;
 
         for (size_t a = 0; a < prim.attributes_count; ++a) {
           cgltf_attribute &attr = prim.attributes[a];
           if (attr.type == cgltf_attribute_type_position) {
-            pos = (float *)((char *)attr.data->buffer_view->buffer->data +
-                            attr.data->buffer_view->offset + attr.data->offset);
-            posCount = attr.data->count;
+            posAccessor = attr.data;
           } else if (attr.type == cgltf_attribute_type_normal) {
-            norm =
-                (float *)((char *)attr.data->buffer_view->buffer->data +
-                          attr.data->buffer_view->offset + attr.data->offset);
+            normAccessor = attr.data;
           } else if (attr.type == cgltf_attribute_type_texcoord) {
-            uv = (float *)((char *)attr.data->buffer_view->buffer->data +
-                           attr.data->buffer_view->offset + attr.data->offset);
+            uvAccessor = attr.data;
           } else if (attr.type == cgltf_attribute_type_tangent) {
-            tangent =
-                (float *)((char *)attr.data->buffer_view->buffer->data +
-                          attr.data->buffer_view->offset + attr.data->offset);
+            tangentAccessor = attr.data;
           }
         }
 
-        if (posCount > 0) {
+        if (posAccessor) {
+          size_t posCount = posAccessor->count;
           vertices.resize(posCount);
+
+          std::vector<float> posData(posCount * 3);
+          cgltf_accessor_unpack_floats(posAccessor, posData.data(),
+                                       posData.size());
+
+          std::vector<float> normData;
+          if (normAccessor) {
+            normData.resize(posCount * 3);
+            cgltf_accessor_unpack_floats(normAccessor, normData.data(),
+                                         normData.size());
+          }
+
+          std::vector<float> uvData;
+          if (uvAccessor) {
+            uvData.resize(posCount * 2);
+            cgltf_accessor_unpack_floats(uvAccessor, uvData.data(),
+                                         uvData.size());
+          }
+
+          std::vector<float> tangentData;
+          if (tangentAccessor) {
+            tangentData.resize(posCount * 4);
+            cgltf_accessor_unpack_floats(tangentAccessor, tangentData.data(),
+                                         tangentData.size());
+          }
+
           for (size_t v = 0; v < posCount; ++v) {
-            vertices[v].pos = {pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]};
-            if (norm)
-              vertices[v].normal = {norm[v * 3], norm[v * 3 + 1],
-                                    norm[v * 3 + 2]};
-            if (uv)
-              vertices[v].texCoord = {uv[v * 2], uv[v * 2 + 1]};
-            if (tangent) {
+            vertices[v].pos = {posData[v * 3 + 0], posData[v * 3 + 1],
+                               posData[v * 3 + 2]};
+            if (normAccessor) {
+              vertices[v].normal = {normData[v * 3 + 0], normData[v * 3 + 1],
+                                     normData[v * 3 + 2]};
+            } else {
+              // Default normal, will be updated to face normal if this is a triangle
+              vertices[v].normal = {0.0f, 0.0f, 1.0f};
+            }
+            if (uvAccessor) {
+              vertices[v].texCoord = {uvData[v * 2 + 0], uvData[v * 2 + 1]};
+            }
+            if (tangentAccessor) {
               vertices[v].tangent =
-                  glm::vec4(tangent[v * 4 + 0], tangent[v * 4 + 1],
-                            tangent[v * 4 + 2], tangent[v * 4 + 3]);
+                  glm::vec4(tangentData[v * 4 + 0], tangentData[v * 4 + 1],
+                            tangentData[v * 4 + 2], tangentData[v * 4 + 3]);
             } else {
               vertices[v].tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
             }
           }
-        }
-
-        if (prim.indices) {
-          indices.resize(prim.indices->count);
-          for (size_t k = 0; k < prim.indices->count; ++k) {
-            indices[k] = (uint32_t)cgltf_accessor_read_index(prim.indices, k);
+ 
+          if (prim.indices) {
+            indices.resize(prim.indices->count);
+            for (size_t k = 0; k < prim.indices->count; ++k) {
+              indices[k] = (uint32_t)cgltf_accessor_read_index(prim.indices, k);
+            }
+          }
+ 
+          // Compute normals if missing
+          if (!normAccessor && !indices.empty()) {
+            SDL_Log("AssetManager: Computing normals for GLTF primitive...");
+            for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+              uint32_t i0 = indices[i];
+              uint32_t i1 = indices[i + 1];
+              uint32_t i2 = indices[i + 2];
+              if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size()) continue;
+              glm::vec3 edge1 = vertices[i1].pos - vertices[i0].pos;
+              glm::vec3 edge2 = vertices[i2].pos - vertices[i0].pos;
+              glm::vec3 faceNormal = glm::normalize(glm::cross(edge1, edge2));
+              vertices[i0].normal += faceNormal;
+              vertices[i1].normal += faceNormal;
+              vertices[i2].normal += faceNormal;
+            }
+            for (auto &v : vertices) {
+              v.normal = glm::normalize(v.normal);
+            }
           }
         }
-
+ 
         auto meshAsset = std::make_shared<MeshAsset>();
         meshAsset->vertexCount = static_cast<uint32_t>(vertices.size());
         meshAsset->indexCount = static_cast<uint32_t>(indices.size());
+
+        // Compute AABB
+        if (!vertices.empty()) {
+          glm::vec3 bMin = vertices[0].pos;
+          glm::vec3 bMax = vertices[0].pos;
+          for (auto &v : vertices) {
+            bMin = glm::min(bMin, v.pos);
+            bMax = glm::max(bMax, v.pos);
+          }
+          meshAsset->aabbMin = bMin;
+          meshAsset->aabbMax = bMax;
+        }
 
         {
           size_t vSize = vertices.size() * sizeof(Forma::Vertex);
           VkBuffer stagingBuffer;
           VmaAllocation stagingAlloc;
           m_allocator.createBuffer(vSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                   VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                                   stagingAlloc);
+                                   VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                                   stagingAlloc,
+                                   VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
           void *p;
           vmaMapMemory(m_allocator.getVma(), stagingAlloc, &p);
           memcpy(p, vertices.data(), vSize);
@@ -667,8 +855,9 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
           if (!indices.empty()) {
             size_t iSize = indices.size() * sizeof(uint32_t);
             m_allocator.createBuffer(iSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                     VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                                     stagingAlloc);
+                                     VMA_MEMORY_USAGE_AUTO, stagingBuffer,
+                                     stagingAlloc,
+                                     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
             vmaMapMemory(m_allocator.getVma(), stagingAlloc, &p);
             memcpy(p, indices.data(), iSize);
             vmaUnmapMemory(m_allocator.getVma(), stagingAlloc);
@@ -685,6 +874,9 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
         }
 
         primEnt.mesh = meshAsset;
+        m_meshStore.push_back(meshAsset);
+        m_meshes[path] = meshAsset;
+
         if (prim.material) {
           for (size_t mIdx = 0; mIdx < data->materials_count; ++mIdx) {
             if (&data->materials[mIdx] == prim.material) {
@@ -715,6 +907,44 @@ void AssetManager::loadGLTF(const std::string &path, Mundus::Scene &scene,
 
   cgltf_free(data);
   SDL_Log("AssetManager: Successfully loaded GLTF %s", path.c_str());
+}
+
+std::shared_ptr<MeshAsset> AssetManager::getMesh(const std::string &source) {
+  auto it = m_meshes.find(source);
+  if (it != m_meshes.end())
+    return it->second;
+
+  if (source == "@primitive(cube)") {
+    auto mesh = createCubeMesh();
+    m_meshes[source] = mesh;
+    return mesh;
+  }
+
+  // Resolve relative file paths against assets root
+  if (!source.empty() && source[0] != '@') {
+    std::string full = std::string(CONCORDIA_ASSETS_DIR) + "/" + source;
+    auto it2 = m_meshes.find(full);
+    if (it2 != m_meshes.end())
+      return it2->second;
+  }
+
+  return nullptr;
+}
+
+std::shared_ptr<TextureAsset>
+AssetManager::resolveTexture(const std::string &source, bool srgb) {
+  if (source.empty())
+    return nullptr;
+  std::string key = source + (srgb ? "_srgb" : "_linear");
+  auto it = m_textures.find(key);
+  if (it != m_textures.end())
+    return it->second;
+  // File-based: try loading from assets root
+  if (source.find('/') != std::string::npos) {
+    std::string full = std::string(CONCORDIA_ASSETS_DIR) + "/" + source;
+    return loadTexture(full, srgb);
+  }
+  return nullptr;
 }
 
 } // namespace Memoria

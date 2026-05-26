@@ -22,6 +22,7 @@ struct Transform {
 
 struct Entity {
   std::string name;
+  std::string id;           // stable identifier (defaults to name if empty)
   Transform transform;
 
   // Hierarchy
@@ -32,6 +33,12 @@ struct Entity {
   // Components
   std::shared_ptr<Memoria::MeshAsset> mesh;
   std::shared_ptr<Forma::Material> material;
+
+  // Serialization source tracking
+  std::string meshSource;      // file path or "@primitive(cube)"
+
+  bool visible = true;
+  bool effectiveVisible = true;
 };
 
 } // namespace Mundus

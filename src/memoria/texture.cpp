@@ -1,9 +1,10 @@
 #include "texture.h"
+#include <SDL3/SDL.h>
 #include <iostream>
 #include <stb_image.h>
 #include <stdexcept>
 
-#define STB_IMAGE_IMPLEMENTATION
+
 
 namespace Memoria {
 
@@ -28,12 +29,12 @@ void Texture::load(const std::string &path, Allocator &allocator,
   VkBuffer stagingBuffer;
   VmaAllocation stagingAlloc;
   allocator.createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                         VMA_MEMORY_USAGE_CPU_ONLY, stagingBuffer,
-                         stagingAlloc);
+                         VMA_MEMORY_USAGE_AUTO, stagingBuffer, stagingAlloc,
+                         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
 
   void *data;
   vmaMapMemory(allocator.getVma(), stagingAlloc, &data);
-  memcpy(data, pixels, static_cast<size_t>(imageSize));
+  SDL_memcpy(data, pixels, static_cast<size_t>(imageSize));
   vmaUnmapMemory(allocator.getVma(), stagingAlloc);
 
   stbi_image_free(pixels);

@@ -1,2 +1,7 @@
 /build
-/thirdparty
+.xmake/
+.xmake_submodules/
+/assets/shaders/compiledtoon_fixture_test
+toon_spec_test
+imgui.ini
+roadmap.md

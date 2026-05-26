@@ -12,7 +12,7 @@ layout(location = 2) out vec3 fragNormal;
 layout(location = 3) out vec3 fragPos;
 layout(location = 4) out vec4 fragTangent; // FIXED
 
-layout(set = 0, binding = 0) uniform GlobalUBO {
+layout(std140, set = 0, binding = 0) uniform GlobalUBO {
     vec4 lightDir;
     vec4 viewPos;
     vec4 lightColor;
@@ -27,6 +27,11 @@ layout(push_constant) uniform PushConstants {
     vec4 baseColor;
     float roughness;
     float metallic;
+    uint albedoIdx;
+    uint normalIdx;
+    uint mrIdx;
+    uint aoIdx;
+    uint emissiveIdx;
 } pc;
 
 void main() {
@@ -39,7 +44,7 @@ void main() {
 
     fragNormal = normalize(normalMatrix * inNormal);
 
-    fragTangent.xyz = normalize(normalMatrix * inTangent.xyz);
+    fragTangent.xyz = normalize(mat3(pc.model) * inTangent.xyz);
     fragTangent.w   = inTangent.w; // preserve handedness
 
     fragColor = inColor;

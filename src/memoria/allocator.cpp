@@ -3,7 +3,8 @@
 #include <stdexcept>
 #include <vector>
 
-#define VMA_IMPLEMENTATION
+
+#include "types.h"
 
 namespace Memoria {
 
@@ -29,7 +30,8 @@ Allocator::~Allocator() {
 
 void Allocator::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                              VmaMemoryUsage memoryUsage, VkBuffer &outBuffer,
-                             VmaAllocation &outAllocation) {
+                             VmaAllocation &outAllocation,
+                             VmaAllocationCreateFlags flags) {
   VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   bufferInfo.size = size;
   bufferInfo.usage = usage;
@@ -37,6 +39,7 @@ void Allocator::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
   VmaAllocationCreateInfo allocInfo = {};
   allocInfo.usage = memoryUsage;
+  allocInfo.flags = flags;
 
   if (vmaCreateBuffer(m_allocator, &bufferInfo, &allocInfo, &outBuffer,
                       &outAllocation, nullptr) != VK_SUCCESS) {
@@ -93,7 +96,8 @@ void Allocator::createImage(uint32_t width, uint32_t height, VkFormat format,
                             VkImageTiling tiling, VkImageUsageFlags usage,
                             VmaMemoryUsage memoryUsage, VkImage &outImage,
                             VmaAllocation &outAllocation, uint32_t layerCount,
-                            VkImageCreateFlags flags, uint32_t mipLevels) {
+                            VkImageCreateFlags flags, uint32_t mipLevels,
+                            VmaAllocationCreateFlags allocFlags) {
   VkImageCreateInfo imageInfo = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   imageInfo.imageType = VK_IMAGE_TYPE_2D;
   imageInfo.extent.width = width;
@@ -111,6 +115,7 @@ void Allocator::createImage(uint32_t width, uint32_t height, VkFormat format,
 
   VmaAllocationCreateInfo allocInfo = {};
   allocInfo.usage = memoryUsage;
+  allocInfo.flags = allocFlags;
 
   if (vmaCreateImage(m_allocator, &imageInfo, &allocInfo, &outImage,
                      &outAllocation, nullptr) != VK_SUCCESS) {
@@ -340,6 +345,20 @@ void Allocator::generateMipmaps(VkImage image, VkFormat format,
   vkQueueWaitIdle(graphicsQueue);
 
   vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+}
+
+void MeshAsset::destroy(Allocator &allocator) {
+  if (vertexBuffer)
+    allocator.destroyBuffer(vertexBuffer, vertexAllocation);
+  if (indexBuffer)
+    allocator.destroyBuffer(indexBuffer, indexAllocation);
+}
+
+void TextureAsset::destroy(Allocator &allocator, VkDevice device) {
+  if (view)
+    vkDestroyImageView(device, view, nullptr);
+  if (image)
+    allocator.destroyImage(image, allocation);
 }
 
 } // namespace Memoria

@@ -16,3 +16,12 @@
 [submodule "third_party/fast_obj"]
 	path = third_party/fast_obj
 	url = https://github.com/thisistherk/fast_obj.git
+[submodule "third_party/Vulkan-Loader"]
+	path = third_party/Vulkan-Loader
+	url = https://github.com/KhronosGroup/Vulkan-Loader
+[submodule "third_party/Vulkan-Headers"]
+	path = third_party/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers
+[submodule "third_party/ctoon"]
+	path = third_party/ctoon
+	url = https://github.com/smileyfaceskobochka/ctoon

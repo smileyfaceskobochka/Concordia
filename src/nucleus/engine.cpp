@@ -1,9 +1,10 @@
+#define GLM_ENABLE_EXPERIMENTAL
 #include "engine.h"
 #include "forma/material.h"
 #include "forma/mesh.h"
 #include "lumen/pipeline.h"
 #include "lumen/shader_registry.h"
-#include "mundus/scene.h"
+#include "mundus/scene_pick.h"
 #include "vista/camera.h"
 #include <SDL3/SDL.h>
 #include <backends/imgui_impl_sdl3.h>
@@ -15,14 +16,20 @@
 #include <stdexcept>
 #include <string>
 #include <vk_mem_alloc.h>
-
-#define GLM_ENABLE_EXPERIMENTAL
+#include <algorithm>
+#include "vigil/editor_keys.h"
 
 struct PushConstants {
   glm::mat4 model;
   glm::vec4 baseColor;
   float roughness;
   float metallic;
+  uint32_t albedoIdx;
+  uint32_t normalIdx;
+  uint32_t mrIdx;
+  uint32_t aoIdx;
+  uint32_t emissiveIdx;
+  uint32_t debugMode;
 };
 
 namespace Nucleus {
@@ -30,15 +37,31 @@ namespace Nucleus {
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 Engine::Engine() {
-  m_window = std::make_unique<Petra::Window>("Concordia – Scene", 800, 600);
+  m_config.load_file((std::string(CONCORDIA_ASSETS_DIR) + "/config/engine.toon").c_str());
+
+  const char *title =
+      m_config.get_string("window.title", "Concordia \xe2\x80\x93 Scene");
+  int win_w = (int)m_config.get_number("window.width", 800.0);
+  int win_h = (int)m_config.get_number("window.height", 600.0);
+
+  m_window = std::make_unique<Petra::Window>(title, win_w, win_h);
   m_renderCtx = std::make_unique<Render::Context>(*m_window);
   m_allocator = std::make_unique<Memoria::Allocator>(
       m_renderCtx->getInstance(), m_renderCtx->getPhysicalDevice(),
       m_renderCtx->getDevice());
   m_overlay = std::make_unique<Vigil::Overlay>(*m_window, *m_renderCtx);
   m_input = std::make_unique<Sensus::Input>();
+  float fov = (float)m_config.get_number("camera.fov", 45.0);
+  float nearP = (float)m_config.get_number("camera.near", 0.1);
+  float farP = (float)m_config.get_number("camera.far", 100.0);
+
   m_camera = std::make_unique<Vista::Camera>();
-  m_camera->setPerspective(45.0f, 800.0f / 600.0f, 0.1f, 100.0f);
+  m_camera->setPerspective(fov, (float)win_w / (float)win_h, nearP, farP);
+  m_camera->mouseSensitivity =
+      (float)m_config.get_number("camera.sensitivity", 0.1);
+  m_camera->moveSpeed = (float)m_config.get_number("camera.speed", 5.0);
+
+  m_debugMode = m_config.get_bool("renderer.debug_mode", false) ? 1 : 0;
 
   SDL_Log("Engine: Initializing depth buffer...");
   m_renderCtx->initDepthBuffer(m_allocator->getVma());
@@ -54,8 +77,24 @@ Engine::Engine() {
       *m_allocator, m_renderCtx->getDevice(), m_renderCtx->getGraphicsQueue(),
       m_cmdPool);
 
+  m_descriptors = std::make_unique<Lumen::DescriptorManager>(
+      m_renderCtx->getDevice(), *m_allocator);
+
   SDL_Log("Engine: Initializing descriptors...");
   initDescriptors();
+
+  SDL_Log("Engine: Generating IBL maps...");
+  m_iblMaps = Lumen::IBLGenerator::generate(
+      *m_allocator, m_renderCtx->getDevice(),
+      m_renderCtx->getGraphicsQueue(), m_cmdPool,
+      std::string(CONCORDIA_ASSETS_DIR) +
+          "/images/skybox/cubemap/Cubemap_Sky_01-512x512.png");
+  if (m_iblMaps.irradianceMap) {
+    m_descriptors->updateIBL(m_iblMaps.irradianceMap->view,
+                              m_iblMaps.prefilterMap->view,
+                              m_iblMaps.brdfLUT->view);
+  }
+
   SDL_Log("Engine: Initializing shader registry...");
   initPipeline();
   SDL_Log("Engine: Initializing framebuffers...");
@@ -64,10 +103,30 @@ Engine::Engine() {
   initSync();
   SDL_Log("Engine: Initializing mesh...");
   initMesh();
+
+  // Final bindless update after ALL initial assets are loaded
+  updateBindlessDescriptorSet();
+
+  // Load saved scene if available, otherwise keep test scene from initMesh
+  std::string scenePath =
+      std::string(CONCORDIA_ASSETS_DIR) + "/scenes/default.toon";
+  if (FILE *f = fopen(scenePath.c_str(), "r")) {
+    fclose(f);
+    m_scene.load(scenePath.c_str());
+    SDL_Log("Engine: Loaded scene from %s", scenePath.c_str());
+    resolveSceneMeshes();
+  } else {
+    SDL_Log("Engine: No saved scene found, using test scene");
+  }
+
   SDL_Log("Engine: Constructor finished.");
 }
 
 Engine::~Engine() {
+  std::string scenePath =
+      std::string(CONCORDIA_ASSETS_DIR) + "/scenes/default.toon";
+  m_scene.save(scenePath.c_str());
+
   VkDevice device = m_renderCtx->getDevice();
   if (device) {
     vkDeviceWaitIdle(device);
@@ -77,7 +136,12 @@ Engine::~Engine() {
     m_scene.getEntities().clear();
 
     if (m_allocator) {
+      m_descriptors.reset(); // destroys descriptor pool, layouts, UBO
       m_renderCtx->cleanupDepthBuffer(m_allocator->getVma());
+    }
+
+    if (m_assetManager) {
+      m_assetManager.reset();
     }
 
     for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
@@ -94,37 +158,29 @@ Engine::~Engine() {
 
     m_sampler.destroy(device);
 
-    if (m_globalUBO) {
-      vmaUnmapMemory(m_allocator->getVma(), m_globalUBOAlloc);
-      m_allocator->destroyBuffer(m_globalUBO, m_globalUBOAlloc);
-      m_globalUBO = VK_NULL_HANDLE;
-    }
-
-    if (m_descriptorPool)
-      vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
-    if (m_globalDescriptorLayout)
-      vkDestroyDescriptorSetLayout(device, m_globalDescriptorLayout, nullptr);
-    if (m_materialDescriptorLayout)
-      vkDestroyDescriptorSetLayout(device, m_materialDescriptorLayout, nullptr);
-
     cleanupSwapchainResources();
   }
+}
+
+std::vector<std::string> Engine::getShaderNames() const {
+  return m_shaderRegistry ? m_shaderRegistry->getPipelineNames()
+                          : std::vector<std::string>();
 }
 
 void Engine::initPipeline() {
   m_shaderRegistry = std::make_unique<Lumen::ShaderRegistry>();
 
-  { // Blinn-Phong Pipeline
+  { // PBR Pipeline
     Lumen::PipelineConfig config{};
     config.vertexShaderPath =
         std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/vert.spv";
     config.fragmentShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/frag.spv";
+        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/pbr_frag.spv";
     config.pushConstantSize = sizeof(PushConstants);
     config.bindingDescription = Forma::Vertex::getBindingDescription();
     config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
-    config.descriptorSetLayouts = {m_globalDescriptorLayout,
-                                   m_materialDescriptorLayout};
+    config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
+                                   m_descriptors->getMaterialLayout()};
     config.depthTest = true;
 
     auto pipeline = std::make_shared<Lumen::Pipeline>();
@@ -132,26 +188,7 @@ void Engine::initPipeline() {
     m_shaderRegistry->registerPipeline("pbr", pipeline);
   }
 
-  // Unlit Pipeline
-  {
-    Lumen::PipelineConfig config{};
-    config.vertexShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/vert.spv";
-    config.fragmentShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/unlit_frag.spv";
-    config.pushConstantSize = sizeof(PushConstants);
-    config.bindingDescription = Forma::Vertex::getBindingDescription();
-    config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
-    config.descriptorSetLayouts = {m_globalDescriptorLayout,
-                                   m_materialDescriptorLayout};
-    config.depthTest = true;
-
-    auto pipeline = std::make_shared<Lumen::Pipeline>();
-    pipeline->init(*m_renderCtx, config);
-    m_shaderRegistry->registerPipeline("unlit", pipeline);
-  }
-
-  // Skybox Pipeline
+  // Skybox Pipeline (Cubemap)
   {
     Lumen::PipelineConfig config{};
     config.vertexShaderPath =
@@ -161,8 +198,8 @@ void Engine::initPipeline() {
     config.pushConstantSize = sizeof(PushConstants);
     config.bindingDescription = Forma::Vertex::getBindingDescription();
     config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
-    config.descriptorSetLayouts = {m_globalDescriptorLayout,
-                                   m_materialDescriptorLayout};
+    config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
+                                   m_descriptors->getMaterialLayout()};
     config.depthTest = true;
     config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
     config.depthTest = true;
@@ -173,201 +210,88 @@ void Engine::initPipeline() {
     pipeline->init(*m_renderCtx, config);
     m_shaderRegistry->registerPipeline("skybox", pipeline);
   }
+
+  // Skybox Pipeline (HDRI Equirectangular)
+  {
+    Lumen::PipelineConfig config{};
+    config.vertexShaderPath =
+        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/skybox_vert.spv";
+    config.fragmentShaderPath =
+        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/skybox_hdri_frag.spv";
+    config.pushConstantSize = sizeof(PushConstants);
+    config.bindingDescription = Forma::Vertex::getBindingDescription();
+    config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
+    config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
+                                   m_descriptors->getMaterialLayout()};
+    config.depthTest = true;
+    config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+    config.depthTest = true;
+    config.depthWriteEnable = false;
+    config.cullMode = VK_CULL_MODE_NONE;
+
+    auto pipeline = std::make_shared<Lumen::Pipeline>();
+    pipeline->init(*m_renderCtx, config);
+    m_shaderRegistry->registerPipeline("skybox_hdri", pipeline);
+  }
 }
 void Engine::initDescriptors() {
   VkDevice device = m_renderCtx->getDevice();
   m_sampler.init(device);
 
-  SDL_Log("Engine: Descriptors: Creating layouts...");
-  // --- SET 0: GLOBAL LAYOUT ---
-  VkDescriptorSetLayoutBinding uboBinding{};
-  uboBinding.binding = 0;
-  uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  uboBinding.descriptorCount = 1;
-  uboBinding.stageFlags =
-      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  SDL_Log("Engine: Descriptors: Loading skybox textures...");
+  auto skyboxAssets = m_assetManager->scanSkyboxes();
+  for (auto &sa : skyboxAssets) {
+    std::shared_ptr<Memoria::TextureAsset> tex;
+    if (sa.isHDR) {
+      tex = m_assetManager->loadHDR(sa.path);
+    } else {
+      tex = m_assetManager->loadCubemapFromCross(sa.path);
+    }
+    std::string pipelineName = sa.isHDR ? "skybox_hdri" : "skybox";
+    m_skyboxOptions.push_back({sa.name, pipelineName, tex, sa.path});
+  }
 
-  VkDescriptorSetLayoutBinding skyboxBinding{};
-  skyboxBinding.binding = 1;
-  skyboxBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  skyboxBinding.descriptorCount = 1;
-  skyboxBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  m_skyboxTexture = m_skyboxOptions[0].texture;
+  m_selectedSkybox = 0;
 
-  VkDescriptorSetLayoutBinding irradianceBinding{};
-  irradianceBinding.binding = 2;
-  irradianceBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  irradianceBinding.descriptorCount = 1;
-  irradianceBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  // Collect initial texture views for bindless
+  auto &textures = m_assetManager->getLoadedTextures();
+  std::vector<VkImageView> initialViews;
+  for (auto &t : textures)
+    initialViews.push_back(t->view);
 
-  VkDescriptorSetLayoutBinding prefilterBinding{};
-  prefilterBinding.binding = 3;
-  prefilterBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  prefilterBinding.descriptorCount = 1;
-  prefilterBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  m_descriptors->init(m_sampler.getSampler(), 1024,
+                      initialViews);
 
-  VkDescriptorSetLayoutBinding brdfBinding{};
-  brdfBinding.binding = 4;
-  brdfBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  brdfBinding.descriptorCount = 1;
-  brdfBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  // Write initial skybox descriptor
+  m_descriptors->updateSkybox(m_skyboxTexture->view);
 
-  std::array<VkDescriptorSetLayoutBinding, 5> globalBindings = {
-      uboBinding, skyboxBinding, irradianceBinding, prefilterBinding,
-      brdfBinding};
+  SDL_Log("Engine: Descriptors: Done.");
+}
 
-  VkDescriptorSetLayoutCreateInfo globalInfo{
-      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  globalInfo.bindingCount = static_cast<uint32_t>(globalBindings.size());
-  globalInfo.pBindings = globalBindings.data();
-  VK_CHECK(vkCreateDescriptorSetLayout(device, &globalInfo, nullptr,
-                                       &m_globalDescriptorLayout));
+void Engine::updateBindlessDescriptorSet() {
+  auto &textures = m_assetManager->getLoadedTextures();
+  std::vector<VkImageView> views;
+  for (auto &t : textures)
+    views.push_back(t->view);
+  m_descriptors->updateBindless(views);
+}
 
-  // --- SET 1: MATERIAL LAYOUT ---
-  VkDescriptorSetLayoutBinding albedoBinding{};
-  albedoBinding.binding = 0;
-  albedoBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  albedoBinding.descriptorCount = 1;
-  albedoBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+void Engine::updateIBLDescriptors() {
+  if (!m_iblMaps.irradianceMap || !m_iblMaps.prefilterMap ||
+      !m_iblMaps.brdfLUT) {
+    SDL_Log("Engine: updateIBLDescriptors: IBL maps not ready, skipping.");
+    return;
+  }
+  m_descriptors->updateIBL(m_iblMaps.irradianceMap->view,
+                            m_iblMaps.prefilterMap->view,
+                            m_iblMaps.brdfLUT->view);
+  SDL_Log("Engine: IBL descriptors updated.");
+}
 
-  VkDescriptorSetLayoutBinding normalBinding{};
-  normalBinding.binding = 1;
-  normalBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  normalBinding.descriptorCount = 1;
-  normalBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-  VkDescriptorSetLayoutBinding mrBinding{};
-  mrBinding.binding = 2;
-  mrBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  mrBinding.descriptorCount = 1;
-  mrBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-  VkDescriptorSetLayoutBinding aoBinding{};
-  aoBinding.binding = 3;
-  aoBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  aoBinding.descriptorCount = 1;
-  aoBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-  VkDescriptorSetLayoutBinding emissiveBinding{};
-  emissiveBinding.binding = 4;
-  emissiveBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  emissiveBinding.descriptorCount = 1;
-  emissiveBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-  std::array<VkDescriptorSetLayoutBinding, 5> materialBindings = {
-      albedoBinding, normalBinding, mrBinding, aoBinding, emissiveBinding};
-
-  VkDescriptorSetLayoutCreateInfo materialInfo{
-      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  materialInfo.bindingCount = static_cast<uint32_t>(materialBindings.size());
-  materialInfo.pBindings = materialBindings.data();
-  VK_CHECK(vkCreateDescriptorSetLayout(device, &materialInfo, nullptr,
-                                       &m_materialDescriptorLayout));
-
-  SDL_Log("Engine: Descriptors: Creating pool...");
-  // --- POOL ---
-  std::array<VkDescriptorPoolSize, 2> poolSizes{};
-  poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  poolSizes[0].descriptorCount = 10;
-  poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  poolSizes[1].descriptorCount = 200;
-
-  VkDescriptorPoolCreateInfo poolInfo{
-      VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-  poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-  poolInfo.pPoolSizes = poolSizes.data();
-  poolInfo.maxSets = 50;
-  VK_CHECK(
-      vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool));
-
-  SDL_Log("Engine: Descriptors: Allocating set 0...");
-  // --- GLOBAL SET ALLOCATION & UPDATE ---
-  VkDescriptorSetAllocateInfo allocInfo{
-      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-  allocInfo.descriptorPool = m_descriptorPool;
-  allocInfo.descriptorSetCount = 1;
-  allocInfo.pSetLayouts = &m_globalDescriptorLayout;
-  VK_CHECK(
-      vkAllocateDescriptorSets(device, &allocInfo, &m_globalDescriptorSet));
-
-  SDL_Log("Engine: Descriptors: Creating UBO...");
-  // UBO
-  m_allocator->createBuffer(
-      sizeof(GlobalUBO), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-      VMA_MEMORY_USAGE_CPU_ONLY, m_globalUBO, m_globalUBOAlloc);
-  vmaMapMemory(m_allocator->getVma(), m_globalUBOAlloc, &m_globalUBOMapped);
-
-  VkDescriptorBufferInfo bufferInfo{};
-  bufferInfo.buffer = m_globalUBO;
-  bufferInfo.offset = 0;
-  bufferInfo.range = sizeof(GlobalUBO);
-
-  SDL_Log("Engine: Descriptors: Loading skybox...");
-  // Load Skybox for Set 0 Binding 1
-  m_skyboxTexture = m_assetManager->loadCubemapFromCross(
-      std::string(CONCORDIA_ASSETS_DIR) +
-      "/images/skybox/cubemap/Cubemap_Sky_01-512x512.png");
-
-  SDL_Log("Engine: Descriptors: Updating set 0 (5 bindings)...");
-  VkDescriptorImageInfo skyboxInfo{};
-  skyboxInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  skyboxInfo.imageView = m_skyboxTexture->view;
-  skyboxInfo.sampler = m_sampler.getSampler();
-
-  std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
-  // UBO
-  descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  descriptorWrites[0].dstSet = m_globalDescriptorSet;
-  descriptorWrites[0].dstBinding = 0;
-  descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  descriptorWrites[0].descriptorCount = 1;
-  descriptorWrites[0].pBufferInfo = &bufferInfo;
-
-  // Skybox (Binding 1)
-  descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  descriptorWrites[1].dstSet = m_globalDescriptorSet;
-  descriptorWrites[1].dstBinding = 1;
-  descriptorWrites[1].descriptorType =
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  descriptorWrites[1].descriptorCount = 1;
-  descriptorWrites[1].pImageInfo = &skyboxInfo;
-
-  // Irradiance (Binding 2) - Placeholder
-  descriptorWrites[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  descriptorWrites[2].dstSet = m_globalDescriptorSet;
-  descriptorWrites[2].dstBinding = 2;
-  descriptorWrites[2].descriptorType =
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  descriptorWrites[2].descriptorCount = 1;
-  descriptorWrites[2].pImageInfo = &skyboxInfo;
-
-  // Prefilter (Binding 3) - Placeholder
-  descriptorWrites[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  descriptorWrites[3].dstSet = m_globalDescriptorSet;
-  descriptorWrites[3].dstBinding = 3;
-  descriptorWrites[3].descriptorType =
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  descriptorWrites[3].descriptorCount = 1;
-  descriptorWrites[3].pImageInfo = &skyboxInfo;
-
-  // BRDF (Binding 4) - Placeholder (Wait, BRDF is 2D, skybox is Cube! This will
-  // fail validation but might work for a quick test) Actually, I should use the
-  // White texture for 2D placeholders.
-  VkDescriptorImageInfo whiteInfo{};
-  whiteInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  whiteInfo.imageView = m_assetManager->getDefaultBRDF()->view;
-  whiteInfo.sampler = m_sampler.getSampler();
-
-  descriptorWrites[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  descriptorWrites[4].dstSet = m_globalDescriptorSet;
-  descriptorWrites[4].dstBinding = 4;
-  descriptorWrites[4].descriptorType =
-      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  descriptorWrites[4].descriptorCount = 1;
-  descriptorWrites[4].pImageInfo = &whiteInfo;
-
-  vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()),
-                         descriptorWrites.data(), 0, nullptr);
-  SDL_Log("Engine: Descriptors: Set 0 updated.");
+void Engine::updateSkyboxDescriptor() {
+  m_descriptors->updateSkybox(m_skyboxTexture->view);
+  SDL_Log("Engine: Skybox descriptor updated.");
 }
 
 void Engine::cleanupSwapchainResources() {
@@ -447,15 +371,15 @@ void Engine::recreateSwapchain() {
   m_renderCtx->initDepthBuffer(m_allocator->getVma());
 
   auto extent = m_renderCtx->getSwapchainExtent();
-  m_camera->setPerspective(45.0f,
-                           static_cast<float>(extent.width) /
-                               static_cast<float>(extent.height),
-                           0.1f, 100.0f);
+  m_camera->setPerspective(
+      (float)m_config.get_number("camera.fov", 45.0),
+      static_cast<float>(extent.width) / static_cast<float>(extent.height),
+      (float)m_config.get_number("camera.near", 0.1),
+      (float)m_config.get_number("camera.far", 100.0));
   initFramebuffers();
 }
 
 void Engine::drawFrame() {
-  SDL_Log("Engine: drawFrame() started.");
   if (m_needsResize) {
     SDL_Log("Engine: drawFrame: needsResize");
     recreateSwapchain();
@@ -487,8 +411,6 @@ void Engine::drawFrame() {
   VK_CHECK(vkResetCommandBuffer(cb, 0));
 
   // Calculate stats
-  float time =
-      (float)(SDL_GetPerformanceCounter() - m_startCount) / (float)m_perfFreq;
   static uint64_t lastCount = SDL_GetPerformanceCounter();
   uint64_t currentCount = SDL_GetPerformanceCounter();
   float frameTimeMs =
@@ -529,10 +451,69 @@ void Engine::drawFrame() {
 
   // UI overlay
   m_overlay->beginFrame();
-  m_overlay->drawUI(*m_renderCtx, stats, m_scene);
+  std::vector<const char *> skyboxNamePtrs;
+  skyboxNamePtrs.reserve(m_skyboxOptions.size());
+  for (auto &opt : m_skyboxOptions)
+    skyboxNamePtrs.push_back(opt.name.c_str());
+  auto shaderNames = getShaderNames();
+  std::vector<const char *> shaderNamePtrs;
+  shaderNamePtrs.reserve(shaderNames.size());
+  for (auto &sn : shaderNames)
+    shaderNamePtrs.push_back(sn.c_str());
+  m_overlay->drawUI(*m_renderCtx, stats, m_scene, *m_assetManager,
+                    m_sampler.getSampler(), &m_debugMode,
+                    &m_selectedSkybox, static_cast<uint32_t>(m_skyboxOptions.size()),
+                    skyboxNamePtrs.data(),
+                    static_cast<uint32_t>(shaderNamePtrs.size()),
+                    shaderNamePtrs.data());
 
   if (wantCapture != m_input->isCaptured()) {
     m_input->setCapture(wantCapture, m_window->getHandle());
+  }
+
+  // Viewport click selection (only when NOT hovering any ImGui window)
+  if (!ImGui::GetIO().WantCaptureMouse &&
+      m_input->isMousePressed(Sensus::MouseButton::Left)) {
+    pickEntityAtMouse();
+  }
+
+  // Handle focus camera request from inspector context menu
+  if (stats.hasFocusTarget) {
+    glm::vec3 target = stats.focusTarget;
+    glm::vec3 eye = target + glm::vec3(2.0f, 1.0f, 2.0f);
+    m_camera->lookAt(eye, target, glm::vec3(0.0f, 1.0f, 0.0f));
+    stats.hasFocusTarget = false;
+  }
+
+  // Update skybox if selection changed
+  if (m_selectedSkybox < m_skyboxOptions.size()) {
+    auto &opt = m_skyboxOptions[m_selectedSkybox];
+    if (m_skyboxTexture != opt.texture) {
+      m_skyboxTexture = opt.texture;
+      auto &skyboxEnt = m_scene.getEntities()[m_skyboxEntityIndex];
+      skyboxEnt.material->shaderName = opt.pipelineName;
+      updateSkyboxDescriptor();
+
+      // Regenerate IBL maps for the new skybox
+      VkQueue gfxQueue = m_renderCtx->getGraphicsQueue();
+      if (m_iblMaps.irradianceMap)
+        m_iblMaps.irradianceMap->destroy(*m_allocator, m_renderCtx->getDevice());
+      if (m_iblMaps.prefilterMap)
+        m_iblMaps.prefilterMap->destroy(*m_allocator, m_renderCtx->getDevice());
+      if (m_iblMaps.brdfLUT)
+        m_iblMaps.brdfLUT->destroy(*m_allocator, m_renderCtx->getDevice());
+
+      if (opt.pipelineName == "skybox") {
+        m_iblMaps = Lumen::IBLGenerator::generate(
+            *m_allocator, m_renderCtx->getDevice(), gfxQueue, m_cmdPool,
+            opt.sourcePath);
+      } else {
+        m_iblMaps = Lumen::IBLGenerator::generateFromHDR(
+            *m_allocator, m_renderCtx->getDevice(), gfxQueue, m_cmdPool,
+            opt.sourcePath);
+      }
+      updateIBLDescriptors();
+    }
   }
 
   // Update Global UBO
@@ -543,12 +524,10 @@ void Engine::drawFrame() {
   ubo.view = m_camera->getView();
   ubo.proj = m_camera->getProj();
   ubo.exposure = 1.0f;
-  ubo.gamma = 2.2f;
-  SDL_Log("Engine: drawFrame: updating UBO");
-  memcpy(m_globalUBOMapped, &ubo, sizeof(GlobalUBO));
-
-  SDL_Log("Engine: drawFrame: beginning command buffer");
-  VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+   ubo.gamma = 2.2f;
+   memcpy(m_descriptors->getUBOMapped(), &ubo, sizeof(GlobalUBO));
+ 
+   VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   VK_CHECK(vkBeginCommandBuffer(cb, &bi));
 
@@ -563,10 +542,9 @@ void Engine::drawFrame() {
   rpbi.framebuffer = m_framebuffers[imageIdx];
   rpbi.renderArea.extent = swapExtent;
   rpbi.clearValueCount = 2;
-  rpbi.pClearValues = clearValues;
-
-  SDL_Log("Engine: drawFrame: beginning render pass");
-  vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+   rpbi.pClearValues = clearValues;
+ 
+   vkCmdBeginRenderPass(cb, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
   VkViewport vp{};
   vp.width = static_cast<float>(swapExtent.width);
@@ -582,7 +560,10 @@ void Engine::drawFrame() {
   VkDeviceSize offset = 0;
 
   for (auto &ent : sceneEntities) {
-    if (!ent.mesh || !ent.material) {
+    if (!ent.mesh || !ent.material || !ent.effectiveVisible) {
+      if (!ent.effectiveVisible) {
+        continue;
+      }
       SDL_Log("Engine: drawFrame: skipping entity %s (no mesh/material)",
               ent.name.c_str());
       continue;
@@ -600,21 +581,22 @@ void Engine::drawFrame() {
       // Bind Global Set (Set 0)
       vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
                               pipeline->getLayout(), 0, 1,
-                              &m_globalDescriptorSet, 0, nullptr);
+                              &m_descriptors->getGlobalSet(), 0, nullptr);
+      // Bind Bindless Set (Set 1)
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              pipeline->getLayout(), 1, 1,
+                              &m_descriptors->getBindlessSet(), 0, nullptr);
       lastPipeline = pipeline.get();
     }
 
-    // Bind Material Set (Set 1) if available
-    if (ent.material->descriptorSet != VK_NULL_HANDLE) {
-      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              pipeline->getLayout(), 1, 1,
-                              &ent.material->descriptorSet, 0, nullptr);
-    }
+    // Bindless indices are passed via PushConstants now.
+    // Set 1 is bound above once per pipeline.
 
     PushConstants pc{};
     // Skybox specifically needs camera translation removed for the infinite
     // effect
-    if (ent.material->shaderName == "skybox") {
+    if (ent.material->shaderName == "skybox" ||
+        ent.material->shaderName == "skybox_hdri") {
       pc.model = glm::translate(glm::mat4(1.0f), m_camera->getPosition());
     } else {
       pc.model = ent.globalTransform;
@@ -622,8 +604,14 @@ void Engine::drawFrame() {
     pc.baseColor = ent.material->baseColor;
     pc.roughness = ent.material->roughness;
     pc.metallic = ent.material->metallic;
-
-    vkCmdPushConstants(cb, pipeline->getLayout(),
+    pc.albedoIdx = ent.material->albedoIdx;
+    pc.normalIdx = ent.material->normalIdx;
+    pc.mrIdx = ent.material->metallicRoughnessIdx;
+     pc.aoIdx = ent.material->aoIdx;
+     pc.emissiveIdx = ent.material->emissiveIdx;
+     pc.debugMode = m_debugMode;
+ 
+     vkCmdPushConstants(cb, pipeline->getLayout(),
                        VK_SHADER_STAGE_VERTEX_BIT |
                            VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(PushConstants), &pc);
@@ -667,153 +655,163 @@ void Engine::drawFrame() {
     throw std::runtime_error("vkQueuePresentKHR failed");
 
   m_frameIndex = (m_frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
-  SDL_Log("Engine: drawFrame: finished frame %u", m_frameIndex);
 }
 
 void Engine::initMesh() {
   m_scene.clear();
 
-  auto centerCubeMesh = m_assetManager->loadMesh(
-      std::string(CONCORDIA_ASSETS_DIR) + "/models/cube.obj", true);
   auto textureCube = m_assetManager->loadTexture(
       std::string(CONCORDIA_ASSETS_DIR) + "/images/CubeTexture.png");
 
-  // Create Materials
+  // Create Manual Materials for OBJ testing
   auto matLit = std::make_shared<Forma::Material>();
   matLit->shaderName = "pbr";
   matLit->albedo = textureCube;
   matLit->baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
-  matLit->roughness = 0.2f;
+  matLit->roughness = 0.5f;
+  matLit->metallic = 0.0f;
 
   auto matUnlit = std::make_shared<Forma::Material>();
   matUnlit->shaderName = "unlit";
   matUnlit->albedo = textureCube;
-  matUnlit->baseColor = {1.0f, 0.5f, 0.5f, 1.0f}; // Reddish unlit
+  matUnlit->baseColor = {1.0f, 0.5f, 0.5f, 1.0f};
 
   auto matGold = std::make_shared<Forma::Material>();
   matGold->shaderName = "pbr";
   matGold->albedo = textureCube;
-  SDL_Log("Engine: initMesh: setupMaterialSet starting...");
-  auto setupMaterialSet = [&](std::shared_ptr<Forma::Material> mat) {
-    if (!mat) {
-      SDL_Log("Engine: setupMaterialSet: mat is NULL");
-      return;
-    }
-    if (mat->descriptorSet != VK_NULL_HANDLE)
-      return;
+  matGold->baseColor = {1.0f, 0.78f, 0.15f, 1.0f}; // gold tint
+  matGold->metallic = 0.95f;
+  matGold->roughness = 0.35f;
 
-    SDL_Log("Engine: setupMaterialSet: allocating descriptor set...");
-    VkDescriptorSetAllocateInfo allocInfo{
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_materialDescriptorLayout;
+  syncMaterialIndices(matLit);
+  syncMaterialIndices(matUnlit);
+  syncMaterialIndices(matGold);
 
-    if (!m_renderCtx) {
-      SDL_Log("Engine: setupMaterialSet: m_renderCtx is NULL!");
-      return;
-    }
-
-    VK_CHECK(vkAllocateDescriptorSets(m_renderCtx->getDevice(), &allocInfo,
-                                      &mat->descriptorSet));
-
-    SDL_Log("Engine: setupMaterialSet: getting fallback textures...");
-    auto getTex = [&](std::shared_ptr<Memoria::TextureAsset> tex,
-                      std::shared_ptr<Memoria::TextureAsset> fallback) {
-      return tex ? tex : fallback;
-    };
-
-    if (!m_assetManager) {
-      SDL_Log("Engine: setupMaterialSet: m_assetManager is NULL!");
-      return;
-    }
-
-    std::array<std::shared_ptr<Memoria::TextureAsset>, 5> targets = {
-        getTex(mat->albedo, m_assetManager->getDefaultWhite()),
-        getTex(mat->normal, m_assetManager->getDefaultNormal()),
-        getTex(mat->metallicRoughness, m_assetManager->getDefaultWhite()),
-        getTex(mat->ao, m_assetManager->getDefaultWhite()),
-        getTex(mat->emissive, m_assetManager->getDefaultBlack())};
-
-    SDL_Log("Engine: setupMaterialSet: updating descriptor sets...");
-    std::array<VkDescriptorImageInfo, 5> imageInfos{};
-    std::array<VkWriteDescriptorSet, 5> writes{};
-
-    for (int i = 0; i < 5; ++i) {
-      if (!targets[i]) {
-        SDL_Log("Engine: setupMaterialSet: target texture %d is NULL!", i);
-        continue;
-      }
-      imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-      imageInfos[i].imageView = targets[i]->view;
-      imageInfos[i].sampler = m_sampler.getSampler();
-
-      writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-      writes[i].dstSet = mat->descriptorSet;
-      writes[i].dstBinding = i;
-      writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-      writes[i].descriptorCount = 1;
-      writes[i].pImageInfo = &imageInfos[i];
-    }
-
-    vkUpdateDescriptorSets(m_renderCtx->getDevice(),
-                           static_cast<uint32_t>(writes.size()), writes.data(),
-                           0, nullptr);
-    SDL_Log("Engine: setupMaterialSet: done.");
-  };
+  updateBindlessDescriptorSet();
 
   SDL_Log("Engine: initMesh: setting up initial materials...");
-  setupMaterialSet(matLit);
-  setupMaterialSet(matUnlit);
-  setupMaterialSet(matGold);
+  // Bindless does not need per-material descriptor sets.
   SDL_Log("Engine: initMesh: initial materials setup done.");
 
   // Add Skybox Entity
-  int skyboxIdx = m_scene.addEntity("Skybox");
-  auto &skybox = m_scene.getEntities()[skyboxIdx];
-  skybox.mesh = centerCubeMesh;
+  m_skyboxEntityIndex = m_scene.addEntity("Skybox");
+  auto &skybox = m_scene.getEntities()[m_skyboxEntityIndex];
+  skybox.mesh = m_assetManager->createCubeMesh();
+  skybox.meshSource = "@primitive(cube)";
   skybox.material = std::make_shared<Forma::Material>();
-  skybox.material->shaderName = "skybox";
+  skybox.material->shaderName = m_skyboxOptions[m_selectedSkybox].pipelineName;
   skybox.material->albedo = m_skyboxTexture;
   skybox.transform.scale = {10.0f, 10.0f, 10.0f};
-  setupMaterialSet(skybox.material);
-
-  // Load GLTF Model
+  syncMaterialIndices(skybox.material);
+ 
+  // Load GLTF Models
   m_assetManager->loadGLTF(std::string(CONCORDIA_ASSETS_DIR) +
-                               "/models/gltf/DamagedHelmet.glb",
+                              "/models/gltf/DamagedHelmet.glb",
                            m_scene);
-
+  
+  m_assetManager->loadGLTF(
+      std::string(CONCORDIA_ASSETS_DIR) + "/models/gltf/cube.glb", m_scene);
+  
+  // Strip assets dir prefix for portable scene URIs
+  {
+    std::string prefix = std::string(CONCORDIA_ASSETS_DIR) + "/";
+    auto strip = [&](std::string &s) {
+      if (s.compare(0, prefix.size(), prefix) == 0)
+        s = s.substr(prefix.size());
+    };
+    for (auto &ent : m_scene.getEntities()) {
+      strip(ent.meshSource);
+      if (ent.material) {
+        strip(ent.material->albedoSource);
+        strip(ent.material->normalSource);
+        strip(ent.material->metallicRoughnessSource);
+        strip(ent.material->aoSource);
+        strip(ent.material->emissiveSource);
+      }
+    }
+  }
+  
+  // Set up hierarchy: Parent GLTF Cube -> Child GLTF Cube
+  int parentIdx = m_scene.findEntity("Cube");
+  if (parentIdx != -1) {
+    auto &parent = m_scene.getEntities()[parentIdx];
+    parent.transform.position = {0, 0, 0};
+ 
+    // Add a smaller child cube to the left
+    int childIdx = m_scene.addEntity("ChildCube", parentIdx);
+    auto &child = m_scene.getEntities()[childIdx];
+    child.mesh = parent.mesh;
+    child.material = parent.material;
+    child.meshSource = parent.meshSource;
+    child.transform.position = {-1.5f, 0, 0};
+    child.transform.scale = {0.5f, 0.5f, 0.5f};
+    if (child.material) syncMaterialIndices(child.material);
+  }
+ 
   // Ensure all entities loaded from GLTF have their material descriptors setup
   for (auto &ent : m_scene.getEntities()) {
     if (ent.material && ent.material->shaderName == "pbr") {
-      setupMaterialSet(ent.material);
+      syncMaterialIndices(ent.material);
     }
   }
+}
 
-  // Center Cube (Parent)
-  int centerIdx = m_scene.addEntity("CenterCube");
-  auto &center = m_scene.getEntities()[centerIdx];
-  center.mesh = centerCubeMesh;
-  center.material = matGold;
-  center.transform.position = {0, 2.0f, 0}; // Move it up to see helmet below?
-  center.transform.angularVelocity = {0, glm::radians(45.0f), 0};
-  setupMaterialSet(center.material);
+void Engine::syncMaterialIndices(std::shared_ptr<Forma::Material> mat) {
+  if (!mat)
+    return;
+  auto resolve = [&](std::shared_ptr<Memoria::TextureAsset> &tex,
+                     const std::string &source, bool srgb,
+                     std::shared_ptr<Memoria::TextureAsset> fallback) {
+    if (!tex && !source.empty())
+      tex = m_assetManager->resolveTexture(source, srgb);
+    if (!tex)
+      tex = fallback;
+  };
+  resolve(mat->albedo, mat->albedoSource, true,
+          m_assetManager->getDefaultWhite());
+  resolve(mat->normal, mat->normalSource, false,
+          m_assetManager->getDefaultNormal());
+  resolve(mat->metallicRoughness, mat->metallicRoughnessSource, false,
+          m_assetManager->getDefaultWhiteLinear());
+  resolve(mat->ao, mat->aoSource, false,
+          m_assetManager->getDefaultWhiteLinear());
+  resolve(mat->emissive, mat->emissiveSource, true,
+          m_assetManager->getDefaultBlack());
+  mat->albedoIdx = mat->albedo->textureId;
+  mat->normalIdx = mat->normal->textureId;
+  mat->metallicRoughnessIdx = mat->metallicRoughness->textureId;
+  mat->aoIdx = mat->ao->textureId;
+  mat->emissiveIdx = mat->emissive->textureId;
+}
 
-  // Left Cube (Child)
-  int leftIdx = m_scene.addEntity("CubeLeft", centerIdx);
-  auto &left = m_scene.getEntities()[leftIdx];
-  left.mesh = centerCubeMesh;
-  left.material = matLit;
-  left.transform.position = {-2.0f, 0, 0};
-  left.transform.scale = {0.5f, 0.5f, 0.5f};
+void Engine::resolveSceneMeshes() {
+  for (auto &ent : m_scene.getEntities()) {
+    if (!ent.meshSource.empty() && !ent.mesh) {
+      ent.mesh = m_assetManager->getMesh(ent.meshSource);
+      if (ent.mesh) {
+        SDL_Log("Engine: resolved mesh for '%s' (%s)", ent.name.c_str(),
+                ent.meshSource.c_str());
+      } else {
+        SDL_Log("Engine: unresolved mesh source '%s' for entity '%s'",
+                ent.meshSource.c_str(), ent.name.c_str());
+      }
+    }
+    if (ent.material) {
+      syncMaterialIndices(ent.material);
+    }
+  }
+  updateBindlessDescriptorSet();
+  SDL_Log("Engine: scene resolve complete (%zu entities processed)",
+          m_scene.getEntities().size());
+}
 
-  // Right Cube (Child)
-  int rightIdx = m_scene.addEntity("CubeRight", centerIdx);
-  auto &right = m_scene.getEntities()[rightIdx];
-  right.mesh = centerCubeMesh;
-  right.material = matUnlit;
-  right.transform.position = {2.0f, 0, 0};
-  right.transform.scale = {0.5f, 0.5f, 0.5f};
+void Engine::pickEntityAtMouse() {
+  float mx, my;
+  SDL_GetMouseState(&mx, &my);
+  int vpW, vpH;
+  SDL_GetWindowSize(m_window->getHandle(), &vpW, &vpH);
+  int idx = Mundus::pickEntity(m_scene, *m_camera, mx, my, vpW, vpH);
+  m_overlay->setSelectedEntity(idx);
 }
 
 void Engine::run() {
@@ -857,6 +855,11 @@ void Engine::run() {
           m_input->processEvent(ev);
         }
       }
+
+      // Blender-style keyboard shortcuts
+      Vigil::processEditorKeys(ev, imguiCapturesKeyboard,
+                               imguiCapturesMouse, m_input->isCaptured(),
+                               *m_overlay, m_scene, *m_camera);
     }
     drawFrame();
   }
