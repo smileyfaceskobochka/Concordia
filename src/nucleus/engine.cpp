@@ -4,6 +4,7 @@
 #include "forma/mesh.h"
 #include "lumen/pipeline.h"
 #include "lumen/shader_registry.h"
+#include "mundus/schema.h"
 #include "mundus/scene_pick.h"
 #include "vista/camera.h"
 #include <SDL3/SDL.h>
@@ -39,10 +40,18 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 Engine::Engine() {
   m_config.load_file((std::string(CONCORDIA_ASSETS_DIR) + "/config/engine.toon").c_str());
 
-  const char *title =
-      m_config.get_string("window.title", "Concordia \xe2\x80\x93 Scene");
-  int win_w = (int)m_config.get_number("window.width", 800.0);
-  int win_h = (int)m_config.get_number("window.height", 600.0);
+  {
+    std::string schemaErrors;
+    if (!Mundus::Schema::validateConfig(m_config.get(), schemaErrors)) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Engine config schema violations:\n%s",
+                  schemaErrors.c_str());
+    }
+  }
+
+  const char *title = m_config.get_string("window.title");
+  int win_w = (int)m_config.get_number("window.width");
+  int win_h = (int)m_config.get_number("window.height");
 
   m_window = std::make_unique<Petra::Window>(title, win_w, win_h);
   m_renderCtx = std::make_unique<Render::Context>(*m_window);
@@ -51,17 +60,83 @@ Engine::Engine() {
       m_renderCtx->getDevice());
   m_overlay = std::make_unique<Vigil::Overlay>(*m_window, *m_renderCtx);
   m_input = std::make_unique<Sensus::Input>();
-  float fov = (float)m_config.get_number("camera.fov", 45.0);
-  float nearP = (float)m_config.get_number("camera.near", 0.1);
-  float farP = (float)m_config.get_number("camera.far", 100.0);
+  float fov = (float)m_config.get_number("camera.fov");
+  float nearP = (float)m_config.get_number("camera.near");
+  float farP = (float)m_config.get_number("camera.far");
 
   m_camera = std::make_unique<Vista::Camera>();
   m_camera->setPerspective(fov, (float)win_w / (float)win_h, nearP, farP);
-  m_camera->mouseSensitivity =
-      (float)m_config.get_number("camera.sensitivity", 0.1);
-  m_camera->moveSpeed = (float)m_config.get_number("camera.speed", 5.0);
+  m_camera->mouseSensitivity = (float)m_config.get_number("camera.sensitivity");
+  m_camera->moveSpeed = (float)m_config.get_number("camera.speed");
+  {
+    auto pos = m_config.get_string("camera.default_position");
+    if (pos) {
+      glm::vec3 v;
+      if (sscanf(pos, "@vec3(%f,%f,%f)", &v.x, &v.y, &v.z) == 3)
+        m_camera->setPosition(v);
+    }
+    float yaw = (float)m_config.get_number("camera.default_yaw", -90.0f);
+    m_camera->setYaw(yaw);
+    float minP = (float)m_config.get_number("camera.min_pitch", -89.0f);
+    float maxP = (float)m_config.get_number("camera.max_pitch", 89.0f);
+    m_camera->setPitchClamp(minP, maxP);
+  }
 
-  m_debugMode = m_config.get_bool("renderer.debug_mode", false) ? 1 : 0;
+  m_exposure = (float)m_config.get_number("renderer.exposure", 1.0f);
+  m_gamma = (float)m_config.get_number("renderer.gamma", 2.2f);
+
+  {
+    auto cc = m_config.get_string("renderer.clear_color");
+    if (cc) {
+      glm::vec4 v;
+      if (sscanf(cc, "@color(%f,%f,%f,%f)", &v.x, &v.y, &v.z, &v.w) == 4)
+        m_clearColor = v;
+    }
+  }
+
+  m_maxBindlessTextures =
+      (uint32_t)m_config.get_number("renderer.max_bindless_textures", 1024);
+
+  {
+    auto sp = m_config.get_string("scene.default_path");
+    if (sp) {
+      const char *p = sp;
+      // Strip "@asset(assets://" prefix and trailing ")"
+      if (strncmp(p, "assets://", 9) == 0)
+        m_scenePath = std::string(CONCORDIA_ASSETS_DIR) + "/" + (p + 9);
+      else
+        m_scenePath = p;
+    }
+  }
+  if (m_scenePath.empty())
+    m_scenePath = std::string(CONCORDIA_ASSETS_DIR) + "/scenes/default.toon";
+  m_autoSave = m_config.get_bool("scene.auto_save", true);
+
+  {
+    auto ld = m_config.get_string("lighting.default_direction");
+    if (ld && sscanf(ld, "@vec3(%f,%f,%f)",
+                     &m_lightDefaultDir.x, &m_lightDefaultDir.y,
+                     &m_lightDefaultDir.z) != 3) {
+      m_lightDefaultDir = {-0.5f, -1.0f, -0.2f};
+    }
+    auto lc = m_config.get_string("lighting.default_color");
+    if (lc && sscanf(lc, "@vec3(%f,%f,%f)",
+                     &m_lightDefaultColor.x, &m_lightDefaultColor.y,
+                     &m_lightDefaultColor.z) != 3) {
+      m_lightDefaultColor = {1.0f, 1.0f, 1.0f};
+    }
+  }
+
+  {
+    auto ss = m_config.get_string("skybox.default_scale");
+    if (ss && sscanf(ss, "@vec3(%f,%f,%f)",
+                     &m_skyboxDefaultScale.x, &m_skyboxDefaultScale.y,
+                     &m_skyboxDefaultScale.z) != 3) {
+      m_skyboxDefaultScale = {10.0f, 10.0f, 10.0f};
+    }
+  }
+
+  m_debugMode = m_config.get_bool("renderer.debug_mode") ? 1 : 0;
 
   SDL_Log("Engine: Initializing depth buffer...");
   m_renderCtx->initDepthBuffer(m_allocator->getVma());
@@ -77,6 +152,13 @@ Engine::Engine() {
       *m_allocator, m_renderCtx->getDevice(), m_renderCtx->getGraphicsQueue(),
       m_cmdPool);
 
+  // Load asset manifest (preloads meshes, sets defaults)
+  {
+    std::string manifestPath =
+        std::string(CONCORDIA_ASSETS_DIR) + "/config/assets.toon";
+    m_assetManager->loadManifest(manifestPath.c_str(), m_scene);
+  }
+
   m_descriptors = std::make_unique<Lumen::DescriptorManager>(
       m_renderCtx->getDevice(), *m_allocator);
 
@@ -84,11 +166,16 @@ Engine::Engine() {
   initDescriptors();
 
   SDL_Log("Engine: Generating IBL maps...");
-  m_iblMaps = Lumen::IBLGenerator::generate(
-      *m_allocator, m_renderCtx->getDevice(),
-      m_renderCtx->getGraphicsQueue(), m_cmdPool,
-      std::string(CONCORDIA_ASSETS_DIR) +
-          "/images/skybox/cubemap/Cubemap_Sky_01-512x512.png");
+  {
+    std::string skyboxPath = m_assetManager->getManifest().defaultSkybox;
+    if (skyboxPath.empty())
+      skyboxPath = "images/skybox/cubemap/Cubemap_Sky_01-512x512.png";
+    std::string fullPath =
+        std::string(CONCORDIA_ASSETS_DIR) + "/" + skyboxPath;
+    m_iblMaps = Lumen::IBLGenerator::generate(
+        *m_allocator, m_renderCtx->getDevice(),
+        m_renderCtx->getGraphicsQueue(), m_cmdPool, fullPath);
+  }
   if (m_iblMaps.irradianceMap) {
     m_descriptors->updateIBL(m_iblMaps.irradianceMap->view,
                               m_iblMaps.prefilterMap->view,
@@ -107,13 +194,11 @@ Engine::Engine() {
   // Final bindless update after ALL initial assets are loaded
   updateBindlessDescriptorSet();
 
-  // Load saved scene if available, otherwise keep test scene from initMesh
-  std::string scenePath =
-      std::string(CONCORDIA_ASSETS_DIR) + "/scenes/default.toon";
-  if (FILE *f = fopen(scenePath.c_str(), "r")) {
+  // Load saved scene if available
+  if (FILE *f = fopen(m_scenePath.c_str(), "r")) {
     fclose(f);
-    m_scene.load(scenePath.c_str());
-    SDL_Log("Engine: Loaded scene from %s", scenePath.c_str());
+    m_scene.load(m_scenePath.c_str());
+    SDL_Log("Engine: Loaded scene from %s", m_scenePath.c_str());
     resolveSceneMeshes();
   } else {
     SDL_Log("Engine: No saved scene found, using test scene");
@@ -123,9 +208,8 @@ Engine::Engine() {
 }
 
 Engine::~Engine() {
-  std::string scenePath =
-      std::string(CONCORDIA_ASSETS_DIR) + "/scenes/default.toon";
-  m_scene.save(scenePath.c_str());
+  if (m_autoSave)
+    m_scene.save(m_scenePath.c_str());
 
   VkDevice device = m_renderCtx->getDevice();
   if (device) {
@@ -167,71 +251,135 @@ std::vector<std::string> Engine::getShaderNames() const {
                           : std::vector<std::string>();
 }
 
+static inline const char *obj_str(toon_value *obj, const char *key) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_STRING ? v->str_val : nullptr;
+}
+static inline double obj_num(toon_value *obj, const char *key, double def = 0.0) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_NUMBER ? v->num_val : def;
+}
+static inline bool obj_bool(toon_value *obj, const char *key, bool def = false) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_BOOL ? v->bool_val : def;
+}
+
+static VkCompareOp parseCompareOp(const std::string &s) {
+  if (s == "LESS") return VK_COMPARE_OP_LESS;
+  if (s == "ALWAYS") return VK_COMPARE_OP_ALWAYS;
+  if (s == "EQUAL") return VK_COMPARE_OP_EQUAL;
+  if (s == "NEVER") return VK_COMPARE_OP_NEVER;
+  if (s == "GREATER") return VK_COMPARE_OP_GREATER;
+  if (s == "NOT_EQUAL") return VK_COMPARE_OP_NOT_EQUAL;
+  return VK_COMPARE_OP_LESS;
+}
+
+static VkCullModeFlags parseCullMode(const std::string &s) {
+  if (s == "NONE") return VK_CULL_MODE_NONE;
+  if (s == "BACK") return VK_CULL_MODE_BACK_BIT;
+  if (s == "FRONT") return VK_CULL_MODE_FRONT_BIT;
+  if (s == "FRONT_AND_BACK") return VK_CULL_MODE_FRONT_AND_BACK;
+  return VK_CULL_MODE_BACK_BIT;
+}
+
 void Engine::initPipeline() {
   m_shaderRegistry = std::make_unique<Lumen::ShaderRegistry>();
 
-  { // PBR Pipeline
-    Lumen::PipelineConfig config{};
-    config.vertexShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/vert.spv";
-    config.fragmentShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/pbr_frag.spv";
-    config.pushConstantSize = sizeof(PushConstants);
-    config.bindingDescription = Forma::Vertex::getBindingDescription();
-    config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
-    config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
-                                   m_descriptors->getMaterialLayout()};
-    config.depthTest = true;
-
-    auto pipeline = std::make_shared<Lumen::Pipeline>();
-    pipeline->init(*m_renderCtx, config);
-    m_shaderRegistry->registerPipeline("pbr", pipeline);
+  // Load pipeline configs from TOON
+  Auxilia::toon_doc pipDoc;
+  std::string pipPath =
+      std::string(CONCORDIA_ASSETS_DIR) + "/config/render_pipelines.toon";
+  bool loaded = pipDoc.load_file(pipPath.c_str());
+  if (loaded) {
+    std::string errors;
+    if (!Mundus::Schema::validateRenderPipelines(pipDoc.get(), errors)) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                  "Render pipelines schema violations:\n%s",
+                  errors.c_str());
+    }
   }
 
-  // Skybox Pipeline (Cubemap)
-  {
+  auto createPipelineFromConfig = [&](toon_value *entry) {
+    const char *name = obj_str(entry, "name");
+    if (!name) return;
+
     Lumen::PipelineConfig config{};
-    config.vertexShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/skybox_vert.spv";
-    config.fragmentShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/skybox_frag.spv";
-    config.pushConstantSize = sizeof(PushConstants);
+
+    // Parse shader paths
+    const char *vs = obj_str(entry, "vertex_shader");
+    const char *fs = obj_str(entry, "fragment_shader");
+    if (!vs || !fs) return;
+    std::string vsStr = vs;
+    std::string fsStr = fs;
+    // Strip assets:// or @asset(assets:// prefix
+    auto resolveAssetPath = [&](std::string &s) {
+      if (s.compare(0, 16, "@asset(assets://") == 0 && s.back() == ')')
+        s = std::string(CONCORDIA_ASSETS_DIR) + "/" + s.substr(16, s.size() - 17);
+      else if (s.compare(0, 9, "assets://") == 0)
+        s = std::string(CONCORDIA_ASSETS_DIR) + "/" + s.substr(9);
+    };
+    resolveAssetPath(vsStr);
+    resolveAssetPath(fsStr);
+    config.vertexShaderPath = vsStr;
+    config.fragmentShaderPath = fsStr;
+
+    config.pushConstantSize = (uint32_t)obj_num(entry, "push_constant_size", sizeof(PushConstants));
     config.bindingDescription = Forma::Vertex::getBindingDescription();
     config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
     config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
                                    m_descriptors->getMaterialLayout()};
-    config.depthTest = true;
-    config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-    config.depthTest = true;
-    config.depthWriteEnable = false; // Don't write to depth
-    config.cullMode = VK_CULL_MODE_NONE;
 
+    config.depthTest = obj_bool(entry, "depth_test", true);
+    config.depthWriteEnable = obj_bool(entry, "depth_write", true);
+
+    const char *dc = obj_str(entry, "depth_compare");
+    if (dc) config.depthCompareOp = parseCompareOp(dc);
+
+    const char *cm = obj_str(entry, "cull_mode");
+    if (cm) config.cullMode = parseCullMode(cm);
+
+    SDL_Log("Engine: Creating pipeline '%s' from config (%s, %s)",
+            name, config.vertexShaderPath.c_str(),
+            config.fragmentShaderPath.c_str());
     auto pipeline = std::make_shared<Lumen::Pipeline>();
     pipeline->init(*m_renderCtx, config);
-    m_shaderRegistry->registerPipeline("skybox", pipeline);
-  }
+    m_shaderRegistry->registerPipeline(name, pipeline);
+  };
 
-  // Skybox Pipeline (HDRI Equirectangular)
-  {
-    Lumen::PipelineConfig config{};
-    config.vertexShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/skybox_vert.spv";
-    config.fragmentShaderPath =
-        std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/skybox_hdri_frag.spv";
-    config.pushConstantSize = sizeof(PushConstants);
-    config.bindingDescription = Forma::Vertex::getBindingDescription();
-    config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
-    config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
-                                   m_descriptors->getMaterialLayout()};
-    config.depthTest = true;
-    config.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-    config.depthTest = true;
-    config.depthWriteEnable = false;
-    config.cullMode = VK_CULL_MODE_NONE;
+  if (loaded) {
+    toon_value *arr = toon_obj_get(pipDoc.get(), "pipelines");
+    if (arr && arr->type == TOON_ARRAY) {
+      for (size_t i = 0; i < arr->len; ++i)
+        createPipelineFromConfig(&arr->arr[i]);
+    }
+  } else {
+    // Fallback: create default pipelines
+    SDL_Log("Engine: No render_pipelines.toon, using hardcoded defaults");
 
-    auto pipeline = std::make_shared<Lumen::Pipeline>();
-    pipeline->init(*m_renderCtx, config);
-    m_shaderRegistry->registerPipeline("skybox_hdri", pipeline);
+    auto makeDefault = [&](const char *name, const char *frag,
+                           bool writeDepth, bool alwaysDepth,
+                           VkCullModeFlags cull) {
+      Lumen::PipelineConfig config{};
+      config.vertexShaderPath =
+          std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/vert.spv";
+      config.fragmentShaderPath = std::string(CONCORDIA_ASSETS_DIR) + "/shaders/compiled/" + frag;
+      config.pushConstantSize = sizeof(PushConstants);
+      config.bindingDescription = Forma::Vertex::getBindingDescription();
+      config.attributeDescriptions = Forma::Vertex::getAttributeDescriptions();
+      config.descriptorSetLayouts = {m_descriptors->getGlobalLayout(),
+                                     m_descriptors->getMaterialLayout()};
+      config.depthTest = true;
+      config.depthWriteEnable = writeDepth;
+      config.depthCompareOp = alwaysDepth ? VK_COMPARE_OP_ALWAYS : VK_COMPARE_OP_LESS;
+      config.cullMode = cull;
+      auto pipeline = std::make_shared<Lumen::Pipeline>();
+      pipeline->init(*m_renderCtx, config);
+      m_shaderRegistry->registerPipeline(name, pipeline);
+    };
+
+    makeDefault("pbr", "pbr_frag.spv", true, false, VK_CULL_MODE_BACK_BIT);
+    makeDefault("skybox", "skybox_frag.spv", false, true, VK_CULL_MODE_NONE);
+    makeDefault("skybox_hdri", "skybox_hdri_frag.spv", false, true, VK_CULL_MODE_NONE);
   }
 }
 void Engine::initDescriptors() {
@@ -260,7 +408,7 @@ void Engine::initDescriptors() {
   for (auto &t : textures)
     initialViews.push_back(t->view);
 
-  m_descriptors->init(m_sampler.getSampler(), 1024,
+  m_descriptors->init(m_sampler.getSampler(), m_maxBindlessTextures,
                       initialViews);
 
   // Write initial skybox descriptor
@@ -523,8 +671,8 @@ void Engine::drawFrame() {
   ubo.lightColor = glm::vec4(m_scene.globalLightColor, 1.0f);
   ubo.view = m_camera->getView();
   ubo.proj = m_camera->getProj();
-  ubo.exposure = 1.0f;
-   ubo.gamma = 2.2f;
+  ubo.exposure = m_exposure;
+   ubo.gamma = m_gamma;
    memcpy(m_descriptors->getUBOMapped(), &ubo, sizeof(GlobalUBO));
  
    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -534,7 +682,7 @@ void Engine::drawFrame() {
   auto swapExtent = m_renderCtx->getSwapchainExtent();
 
   VkClearValue clearValues[2];
-  clearValues[0].color = {{0.01f, 0.01f, 0.01f, 1.0f}};
+  clearValues[0].color = {{m_clearColor.r, m_clearColor.g, m_clearColor.b, m_clearColor.a}};
   clearValues[1].depthStencil = {1.0f, 0};
 
   VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -660,95 +808,21 @@ void Engine::drawFrame() {
 void Engine::initMesh() {
   m_scene.clear();
 
-  auto textureCube = m_assetManager->loadTexture(
-      std::string(CONCORDIA_ASSETS_DIR) + "/images/CubeTexture.png");
-
-  // Create Manual Materials for OBJ testing
-  auto matLit = std::make_shared<Forma::Material>();
-  matLit->shaderName = "pbr";
-  matLit->albedo = textureCube;
-  matLit->baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
-  matLit->roughness = 0.5f;
-  matLit->metallic = 0.0f;
-
-  auto matUnlit = std::make_shared<Forma::Material>();
-  matUnlit->shaderName = "unlit";
-  matUnlit->albedo = textureCube;
-  matUnlit->baseColor = {1.0f, 0.5f, 0.5f, 1.0f};
-
-  auto matGold = std::make_shared<Forma::Material>();
-  matGold->shaderName = "pbr";
-  matGold->albedo = textureCube;
-  matGold->baseColor = {1.0f, 0.78f, 0.15f, 1.0f}; // gold tint
-  matGold->metallic = 0.95f;
-  matGold->roughness = 0.35f;
-
-  syncMaterialIndices(matLit);
-  syncMaterialIndices(matUnlit);
-  syncMaterialIndices(matGold);
-
-  updateBindlessDescriptorSet();
-
   SDL_Log("Engine: initMesh: setting up initial materials...");
-  // Bindless does not need per-material descriptor sets.
   SDL_Log("Engine: initMesh: initial materials setup done.");
 
   // Add Skybox Entity
   m_skyboxEntityIndex = m_scene.addEntity("Skybox");
   auto &skybox = m_scene.getEntities()[m_skyboxEntityIndex];
-  skybox.mesh = m_assetManager->createCubeMesh();
+  skybox.mesh = m_assetManager->getMesh("@primitive(cube)");
   skybox.meshSource = "@primitive(cube)";
   skybox.material = std::make_shared<Forma::Material>();
   skybox.material->shaderName = m_skyboxOptions[m_selectedSkybox].pipelineName;
   skybox.material->albedo = m_skyboxTexture;
-  skybox.transform.scale = {10.0f, 10.0f, 10.0f};
+  skybox.transform.scale = m_skyboxDefaultScale;
   syncMaterialIndices(skybox.material);
- 
-  // Load GLTF Models
-  m_assetManager->loadGLTF(std::string(CONCORDIA_ASSETS_DIR) +
-                              "/models/gltf/DamagedHelmet.glb",
-                           m_scene);
-  
-  m_assetManager->loadGLTF(
-      std::string(CONCORDIA_ASSETS_DIR) + "/models/gltf/cube.glb", m_scene);
-  
-  // Strip assets dir prefix for portable scene URIs
-  {
-    std::string prefix = std::string(CONCORDIA_ASSETS_DIR) + "/";
-    auto strip = [&](std::string &s) {
-      if (s.compare(0, prefix.size(), prefix) == 0)
-        s = s.substr(prefix.size());
-    };
-    for (auto &ent : m_scene.getEntities()) {
-      strip(ent.meshSource);
-      if (ent.material) {
-        strip(ent.material->albedoSource);
-        strip(ent.material->normalSource);
-        strip(ent.material->metallicRoughnessSource);
-        strip(ent.material->aoSource);
-        strip(ent.material->emissiveSource);
-      }
-    }
-  }
-  
-  // Set up hierarchy: Parent GLTF Cube -> Child GLTF Cube
-  int parentIdx = m_scene.findEntity("Cube");
-  if (parentIdx != -1) {
-    auto &parent = m_scene.getEntities()[parentIdx];
-    parent.transform.position = {0, 0, 0};
- 
-    // Add a smaller child cube to the left
-    int childIdx = m_scene.addEntity("ChildCube", parentIdx);
-    auto &child = m_scene.getEntities()[childIdx];
-    child.mesh = parent.mesh;
-    child.material = parent.material;
-    child.meshSource = parent.meshSource;
-    child.transform.position = {-1.5f, 0, 0};
-    child.transform.scale = {0.5f, 0.5f, 0.5f};
-    if (child.material) syncMaterialIndices(child.material);
-  }
- 
-  // Ensure all entities loaded from GLTF have their material descriptors setup
+
+  // Ensure all preloaded meshes have their material descriptors setup
   for (auto &ent : m_scene.getEntities()) {
     if (ent.material && ent.material->shaderName == "pbr") {
       syncMaterialIndices(ent.material);

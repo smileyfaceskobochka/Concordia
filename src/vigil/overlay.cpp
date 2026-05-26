@@ -1,7 +1,22 @@
 #include "overlay.h"
+#include "auxilia/toon.hpp"
 #include "lucide_icons.h"
 #include "memoria/asset_manager.h"
+#include "mundus/schema.h"
 #include "vigil/style.h"
+
+static inline const char *obj_str(toon_value *obj, const char *key) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_STRING ? v->str_val : nullptr;
+}
+static inline double obj_num(toon_value *obj, const char *key, double def = 0.0) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_NUMBER ? v->num_val : def;
+}
+static inline bool obj_bool(toon_value *obj, const char *key, bool def = false) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_BOOL ? v->bool_val : def;
+}
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <backends/imgui_impl_sdl3.h>
@@ -26,13 +41,109 @@
 
 namespace Vigil {
 
+void Overlay::loadUIConfig(const std::string &path) {
+  Auxilia::toon_doc doc;
+  if (!doc.load_file(path.c_str()))
+    return;
+
+  std::string errors;
+  if (!Mundus::Schema::validateUI(doc.get(), errors)) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "UI config schema violations:\n%s", errors.c_str());
+  }
+
+  ImGuiIO &io = ImGui::GetIO();
+
+  // Load fonts
+  toon_value *fonts = toon_obj_get(doc.get(), "fonts");
+  if (fonts && fonts->type == TOON_ARRAY) {
+    for (size_t i = 0; i < fonts->len; ++i) {
+      toon_value *entry = &fonts->arr[i];
+      const char *fp = obj_str(entry, "path");
+      float sz = (float)obj_num(entry, "size", 16.0f);
+      float offY = (float)obj_num(entry, "glyph_offset_y", 0.0f);
+      bool merge = obj_bool(entry, "merge_mode", false);
+
+      ImFontConfig cfg;
+      cfg.MergeMode = merge;
+      cfg.GlyphOffset.y = offY;
+      if (merge) {
+        cfg.GlyphMinAdvanceX = sz;
+        static const ImWchar lucideRanges[] = {ICON_LC_MIN, ICON_LC_MAX, 0};
+        io.Fonts->AddFontFromFileTTF(fp, sz, &cfg, lucideRanges);
+      } else {
+        io.Fonts->AddFontFromFileTTF(fp, sz, &cfg);
+      }
+    }
+  }
+
+  m_statsPadding =
+      (float)doc.get_number("stats_padding", m_statsPadding);
+  m_inspectorWidth =
+      (float)doc.get_number("inspector_width", m_inspectorWidth);
+  {
+    auto aws = doc.get_string("asset_window_size");
+    if (aws) {
+      glm::vec2 v;
+      if (sscanf(aws, "@vec2(%f,%f)", &v.x, &v.y) == 2)
+        m_assetWindowSize = v;
+    }
+  }
+  m_renameBufSize = (int)doc.get_number("rename_buf_size", 256);
+  m_sliderSpeedMin = (float)doc.get_number("slider_speed_min", 0.1f);
+  m_sliderSpeedMax = (float)doc.get_number("slider_speed_max", 50.0f);
+  m_sliderSensMin = (float)doc.get_number("slider_sens_min", 0.01f);
+  m_sliderSensMax = (float)doc.get_number("slider_sens_max", 1.0f);
+
+  // Debug modes
+  m_debugModes.clear();
+  toon_value *modes = toon_obj_get(doc.get(), "debug_modes");
+  if (modes && modes->type == TOON_ARRAY) {
+    for (size_t i = 0; i < modes->len; ++i)
+      if (modes->arr[i].type == TOON_STRING && modes->arr[i].str_val)
+        m_debugModes.push_back(modes->arr[i].str_val);
+  }
+  if (m_debugModes.empty())
+    m_debugModes = {"None", "Metallic", "Roughness", "Normals", "Vertex Color"};
+
+  // Apply ImGui style
+  ImGuiStyle &style = ImGui::GetStyle();
+  style.FramePadding.x =
+      (float)doc.get_number("frame_padding", style.FramePadding.x);
+  style.ItemSpacing.x =
+      (float)doc.get_number("item_spacing", style.ItemSpacing.x);
+  style.WindowRounding =
+      (float)doc.get_number("window_rounding", style.WindowRounding);
+  style.FrameRounding =
+      (float)doc.get_number("frame_rounding", style.FrameRounding);
+  style.ScrollbarSize =
+      (float)doc.get_number("scrollbar_size", style.ScrollbarSize);
+  style.GrabMinSize =
+      (float)doc.get_number("grab_min_size", style.GrabMinSize);
+}
+
 Overlay::Overlay(const Petra::Window &window,
                  const Render::Context &renderCtx) {
   m_device = renderCtx.getDevice();
 
+  // Load UI config first to get descriptor pool sizes
+  Auxilia::toon_doc uiDoc;
+  std::string uiPath =
+      std::string(CONCORDIA_ASSETS_DIR) + "/config/ui.toon";
+  float poolSets = 11000.0f;
+  float poolSamplers = 1000.0f;
+  float poolCombined = 1000.0f;
+  if (uiDoc.load_file(uiPath.c_str())) {
+    poolSets = (float)uiDoc.get_number("descriptor_pool_sets", poolSets);
+    poolSamplers =
+        (float)uiDoc.get_number("descriptor_pool_samplers", poolSamplers);
+    poolCombined = (float)uiDoc.get_number(
+        "descriptor_pool_combined_image_samplers", poolCombined);
+  }
+
   VkDescriptorPoolSize pool_sizes[] = {
-      {VK_DESCRIPTOR_TYPE_SAMPLER, 1000},
-      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000},
+      {VK_DESCRIPTOR_TYPE_SAMPLER, (uint32_t)poolSamplers},
+      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (uint32_t)poolCombined},
       {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000},
       {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000},
       {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000},
@@ -45,7 +156,7 @@ Overlay::Overlay(const Petra::Window &window,
   VkDescriptorPoolCreateInfo pool_info = {};
   pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  pool_info.maxSets = 1000 * 11;
+  pool_info.maxSets = (uint32_t)poolSets;
   pool_info.poolSizeCount =
       static_cast<uint32_t>(sizeof(pool_sizes) / sizeof(pool_sizes[0]));
   pool_info.pPoolSizes = pool_sizes;
@@ -61,17 +172,8 @@ Overlay::Overlay(const Petra::Window &window,
 
   applyCustomStyle();
 
-  const char *defaultFontPath =
-      "assets/fonts/JetBrainsMonoNF/JetBrainsMonoNerdFont-Regular.ttf";
-  io.Fonts->AddFontFromFileTTF(defaultFontPath, 16.0f);
-
-  ImFontConfig iconCfg;
-  iconCfg.MergeMode = true;
-  iconCfg.GlyphOffset.y = 2.0f;
-  iconCfg.GlyphMinAdvanceX = 16.0f;
-  static const ImWchar lucideRanges[] = {ICON_LC_MIN, ICON_LC_MAX, 0};
-  io.Fonts->AddFontFromFileTTF(
-      "assets/fonts/lucide/lucide.ttf", 16.0f, &iconCfg, lucideRanges);
+  // Load UI config (fonts, style overrides, etc.)
+  loadUIConfig(uiPath);
 
   ImGui_ImplSDL3_InitForVulkan(window.getHandle());
 
@@ -174,7 +276,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
                          const char *const *skyboxNames,
                          uint32_t shaderCount,
                          const char *const *shaderNames) {
-  const float PAD = 10.0f;
+  const float PAD = m_statsPadding;
   const ImGuiViewport *viewport = ImGui::GetMainViewport();
   ImVec2 work_pos = viewport->WorkPos;
 
@@ -231,9 +333,11 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
 
     if (ImGui::CollapsingHeader(ICON_LC_SETTINGS "  Controls")) {
       if (stats.cameraSpeed)
-        ImGui::SliderFloat("Move Speed", stats.cameraSpeed, 0.1f, 50.0f);
+        ImGui::SliderFloat("Move Speed", stats.cameraSpeed, m_sliderSpeedMin,
+                           m_sliderSpeedMax);
       if (stats.cameraSens)
-        ImGui::SliderFloat("Sensitivity", stats.cameraSens, 0.01f, 1.0f);
+        ImGui::SliderFloat("Sensitivity", stats.cameraSens, m_sliderSensMin,
+                           m_sliderSensMax);
 
       if (stats.captureMouse && !(*stats.captureMouse)) {
         if (ImGui::Button("Enter Viewing Mode (Press ESC to exit)",
@@ -253,7 +357,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - PAD,
              work_pos.y + PAD),
       ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-  ImGui::SetNextWindowSize(ImVec2(350, -1), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(m_inspectorWidth, -1), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowBgAlpha(0.75f);
 
   if (ImGui::Begin("Scene Inspector", nullptr,
@@ -334,11 +438,11 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
         if (ImGui::BeginPopupModal("Rename Entity", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
           static char renameBuf[256];
-          strncpy(renameBuf, ent.name.c_str(), sizeof(renameBuf) - 1);
-          renameBuf[sizeof(renameBuf) - 1] = '\0';
+          strncpy(renameBuf, ent.name.c_str(), m_renameBufSize - 1);
+          renameBuf[m_renameBufSize - 1] = '\0';
           ImGui::Text("New name:");
           ImGui::SameLine();
-          if (ImGui::InputText("##rename", renameBuf, sizeof(renameBuf),
+          if (ImGui::InputText("##rename", renameBuf, m_renameBufSize,
                                ImGuiInputTextFlags_EnterReturnsTrue)) {
             ent.name = renameBuf;
             ImGui::CloseCurrentPopup();
@@ -394,7 +498,6 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       ImGui::EndGroup();
       ImGui::Separator();
 
-      // Measure max label width for property grid
       auto measureLabelWidth = [](const std::vector<const char *> &labels) {
         float w = 0;
         for (auto *l : labels) {
@@ -478,15 +581,16 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
               ImGui::EndCombo();
             }
           });
+
           mat_grid_row("Debug", [&]() {
-            const char *modes[] = {"None", "Metallic", "Roughness", "Normals",
-                                   "Vertex Color"};
-            char buf[32];
-            snprintf(buf, sizeof(buf), "%s", modes[*debugMode]);
-            if (ImGui::BeginCombo("##debug", buf)) {
-              for (int n = 0; n < 5; n++) {
-                if (ImGui::Selectable(modes[n], *debugMode == n)) {
-                  *debugMode = n;
+            const char *preview = (*debugMode < m_debugModes.size())
+                                      ? m_debugModes[*debugMode].c_str()
+                                      : "None";
+            if (ImGui::BeginCombo("##debug", preview)) {
+              for (size_t n = 0; n < m_debugModes.size(); ++n) {
+                if (ImGui::Selectable(m_debugModes[n].c_str(),
+                                      *debugMode == n)) {
+                  *debugMode = static_cast<uint32_t>(n);
                 }
               }
               ImGui::EndCombo();
@@ -607,7 +711,8 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - PAD,
              work_pos.y + PAD + 420),
       ImGuiCond_FirstUseEver, ImVec2(1.0f, 0.0f));
-  ImGui::SetNextWindowSize(ImVec2(420, 320), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(m_assetWindowSize.x, m_assetWindowSize.y),
+                           ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowBgAlpha(0.75f);
 
   if (ImGui::Begin("Asset Manager", nullptr, ImGuiWindowFlags_None)) {

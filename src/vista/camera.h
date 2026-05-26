@@ -15,6 +15,10 @@ public:
                        bool upKey, bool downKey, float deltaTime);
   void processMouse(glm::vec2 mouseDelta);
 
+  void setPosition(glm::vec3 pos) { m_eye = pos; }
+  void setYaw(float yaw) { m_yaw = yaw; updateCameraVectors(); }
+  void setPitchClamp(float minP, float maxP) { m_pitchMin = minP; m_pitchMax = maxP; }
+
   glm::mat4 getView() const;
   glm::mat4 getProj() const;
 
@@ -35,6 +39,8 @@ private:
 
   float m_yaw = -90.0f;
   float m_pitch = 0.0f;
+  float m_pitchMin = -89.0f;
+  float m_pitchMax = 89.0f;
 
   float m_fov = 45.0f;
   float m_aspect = 1.0f;

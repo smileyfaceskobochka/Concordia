@@ -44,10 +44,10 @@ void Camera::processMouse(glm::vec2 mouseDelta) {
       mouseDelta.y *
       mouseSensitivity; // Reversed since Y coordinates go from top to bottom
 
-  if (m_pitch > 89.0f)
-    m_pitch = 89.0f;
-  if (m_pitch < -89.0f)
-    m_pitch = -89.0f;
+  if (m_pitch > m_pitchMax)
+    m_pitch = m_pitchMax;
+  if (m_pitch < m_pitchMin)
+    m_pitch = m_pitchMin;
 
   updateCameraVectors();
 }

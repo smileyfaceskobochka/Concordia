@@ -1,0 +1,27 @@
+camera_forward: "W"
+camera_backward: "S"
+camera_left: "A"
+camera_right: "D"
+camera_up: "SPACE"
+camera_down: "LSHIFT"
+capture_exit: "ESCAPE"
+
+bindings[8]:
+  - action: "delete"
+    key: "DELETE"
+  - action: "delete"
+    key: "X"
+  - action: "toggle_visibility"
+    key: "H"
+  - action: "show_all"
+    key: "H"
+    alt: true
+  - action: "toggle_selection"
+    key: "A"
+  - action: "focus_camera"
+    key: "GRAVE"
+  - action: "duplicate"
+    key: "D"
+    shift: true
+  - action: "hide_cursor"
+    key: "ESCAPE"

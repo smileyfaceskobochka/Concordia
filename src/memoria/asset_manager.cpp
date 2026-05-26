@@ -1,5 +1,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include "asset_manager.h"
+#include "auxilia/toon.hpp"
+#include "mundus/schema.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cgltf.h>
@@ -16,6 +18,19 @@
 #include <vk_mem_alloc.h>
 
 namespace Memoria {
+
+static inline const char *obj_str(toon_value *obj, const char *key) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_STRING ? v->str_val : nullptr;
+}
+static inline double obj_num(toon_value *obj, const char *key, double def = 0.0) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_NUMBER ? v->num_val : def;
+}
+static inline bool obj_bool(toon_value *obj, const char *key, bool def = false) {
+  toon_value *v = toon_obj_get(obj, key);
+  return v && v->type == TOON_BOOL ? v->bool_val : def;
+}
 
 AssetManager::AssetManager(Allocator &allocator, VkDevice device,
                            VkQueue transferQueue, VkCommandPool transferPool)
@@ -44,6 +59,130 @@ AssetManager::~AssetManager() {
   for (auto &tex : m_textureLinearStore) {
     tex->destroy(m_allocator, m_device);
   }
+}
+
+bool AssetManager::loadManifest(const char *path, Mundus::Scene &scene) {
+  Auxilia::toon_doc doc;
+  if (!doc.load_file(path)) {
+    SDL_Log("AssetManager: failed to load manifest: %s", path);
+    return false;
+  }
+  toon_value *root = doc.get();
+  std::string errors;
+  if (!Mundus::Schema::validateManifest(root, errors)) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Asset manifest schema violations:\n%s", errors.c_str());
+  }
+
+  // Parse preload meshes
+  toon_value *arr = toon_obj_get(root, "preload_meshes");
+  if (arr && arr->type == TOON_ARRAY) {
+    std::string prefix = std::string(CONCORDIA_ASSETS_DIR) + "/";
+    for (size_t i = 0; i < arr->len; ++i) {
+      toon_value *e = &arr->arr[i];
+      if (e->type != TOON_STRING || !e->str_val)
+        continue;
+      const char *s = e->str_val;
+      m_manifest.preloadMeshes.push_back(s);
+      size_t len = strlen(s);
+
+      if (len > 11 && strncmp(s, "@primitive(", 11) == 0 && s[len - 1] == ')') {
+        // Primitive mesh — create if not already cached
+        if (!m_meshes.count(s))
+          createCubeMesh();
+        SDL_Log("AssetManager: preloaded %s", s);
+      } else if (len > 17 && strncmp(s, "@asset(assets://", 16) == 0 &&
+                 s[len - 1] == ')') {
+        // GLTF model — extract relative path and load
+        std::string relPath(s + 16, len - 17);
+        std::string fullPath = prefix + relPath;
+        if (!m_meshes.count(fullPath)) {
+          loadGLTF(fullPath, scene);
+          // Strip the assets dir prefix from loaded entity paths
+          auto strip = [&](std::string &t) {
+            if (t.compare(0, prefix.size(), prefix) == 0)
+              t = t.substr(prefix.size());
+          };
+          for (auto &ent : scene.getEntities()) {
+            strip(ent.meshSource);
+            if (ent.material) {
+              strip(ent.material->albedoSource);
+              strip(ent.material->normalSource);
+              strip(ent.material->metallicRoughnessSource);
+              strip(ent.material->aoSource);
+              strip(ent.material->emissiveSource);
+            }
+          }
+        }
+        SDL_Log("AssetManager: preloaded %s", s);
+      }
+    }
+  }
+
+  // Parse default skybox
+  toon_value *sky = toon_obj_get(root, "default_skybox");
+  if (sky && sky->type == TOON_STRING && sky->str_val) {
+    const char *s = sky->str_val;
+    size_t len = strlen(s);
+    if (len > 17 && strncmp(s, "@asset(assets://", 16) == 0 && s[len - 1] == ')') {
+      m_manifest.defaultSkybox = std::string(s + 16, len - 17);
+    }
+  }
+
+  // Parse skybox config
+  toon_value *skyboxCfg = toon_obj_get(root, "skybox");
+  if (skyboxCfg && skyboxCfg->type == TOON_OBJECT) {
+    // Scan directories
+    toon_value *dirs = toon_obj_get(skyboxCfg, "scan_directories");
+    if (dirs && dirs->type == TOON_ARRAY) {
+      for (size_t i = 0; i < dirs->len; ++i) {
+        toon_value *d = &dirs->arr[i];
+        if (d->type != TOON_OBJECT) continue;
+        const char *p = obj_str(d, "path");
+        if (!p) continue;
+        SkyboxScanDir sd;
+        sd.path = p;
+        sd.isHDR = obj_bool(d, "is_hdr", false);
+        m_skyboxScanDirs.push_back(sd);
+      }
+    }
+    // Face names
+    toon_value *faces = toon_obj_get(skyboxCfg, "face_names");
+    if (faces && faces->type == TOON_ARRAY) {
+      for (size_t i = 0; i < faces->len; ++i) {
+        if (faces->arr[i].type == TOON_STRING && faces->arr[i].str_val)
+          m_skyboxFaceNames.push_back(faces->arr[i].str_val);
+      }
+    }
+  }
+  if (m_skyboxScanDirs.empty()) {
+    m_skyboxScanDirs.push_back({"cubemap", false});
+    m_skyboxScanDirs.push_back({"hdri", true});
+  }
+  if (m_skyboxFaceNames.empty()) {
+    m_skyboxFaceNames = {"px.png", "nx.png", "py.png",
+                         "ny.png", "pz.png", "nz.png"};
+  }
+
+  // Parse default material
+  toon_value *dm = toon_obj_get(root, "default_material");
+  if (dm && dm->type == TOON_OBJECT) {
+    const char *s = obj_str(dm, "shader");
+    if (s) m_defaultMaterial.shader = s;
+    const char *bc = obj_str(dm, "base_color");
+    if (bc) {
+      glm::vec4 v;
+      if (sscanf(bc, "@color(%f,%f,%f,%f)", &v.x, &v.y, &v.z, &v.w) == 4)
+        m_defaultMaterial.baseColor = v;
+    }
+    m_defaultMaterial.roughness =
+        (float)obj_num(dm, "roughness", 0.5);
+    m_defaultMaterial.metallic =
+        (float)obj_num(dm, "metallic", 0.0);
+  }
+
+  SDL_Log("AssetManager: manifest loaded from %s", path);
+  return true;
 }
 
 std::shared_ptr<MeshAsset> AssetManager::createCubeMesh() {
@@ -219,13 +358,14 @@ AssetManager::loadCubemap(const std::string &directoryPath) {
     return m_textures[directoryPath];
   }
 
-  const char *faceNames[] = {"px.png", "nx.png", "py.png",
-                             "ny.png", "pz.png", "nz.png"};
   stbi_uc *facePixels[6];
   int width, height, channels;
 
   for (int i = 0; i < 6; ++i) {
-    std::string path = directoryPath + "/" + faceNames[i];
+    std::string faceName = (i < (int)m_skyboxFaceNames.size())
+                               ? m_skyboxFaceNames[i]
+                               : std::string("face") + std::to_string(i) + ".png";
+    std::string path = directoryPath + "/" + faceName;
     facePixels[i] =
         stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
     if (!facePixels[i]) {
@@ -524,15 +664,15 @@ std::vector<AssetManager::SkyboxAsset> AssetManager::scanSkyboxes() const {
   std::vector<SkyboxAsset> results;
   auto baseDir = std::string(CONCORDIA_ASSETS_DIR) + "/images/skybox";
 
-  auto scanDir = [&](const std::string &subDir, bool isHDR) {
-    std::string dirPath = baseDir + "/" + subDir;
+  for (auto &sc : m_skyboxScanDirs) {
+    std::string dirPath = baseDir + "/" + sc.path;
     if (!std::filesystem::exists(dirPath))
-      return;
+      continue;
     for (auto &entry : std::filesystem::directory_iterator(dirPath)) {
       if (!entry.is_regular_file())
         continue;
       auto ext = entry.path().extension().string();
-      if (isHDR) {
+      if (sc.isHDR) {
         if (ext != ".hdr")
           continue;
       } else {
@@ -542,13 +682,10 @@ std::vector<AssetManager::SkyboxAsset> AssetManager::scanSkyboxes() const {
       SkyboxAsset asset;
       asset.name = entry.path().stem().string();
       asset.path = entry.path().string();
-      asset.isHDR = isHDR;
+      asset.isHDR = sc.isHDR;
       results.push_back(std::move(asset));
     }
-  };
-
-  scanDir("cubemap", false);
-  scanDir("hdri", true);
+  }
 
   // Sort by name for consistent ordering
   std::sort(results.begin(), results.end(),

@@ -1,4 +1,5 @@
 #include "scene.h"
+#include "schema.h"
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
@@ -6,6 +7,7 @@
 #include <cmath>
 #include <functional>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace Mundus {
 
@@ -115,6 +117,45 @@ static glm::vec4 get_vec4(toon_value *obj, const char *key, glm::vec4 fallback) 
   return fallback;
 }
 
+static void set_quat(toon_value *obj, const char *key, float x, float y,
+                     float z, float w) {
+  char buf[96];
+  snprintf(buf, sizeof(buf), "@quat(%g,%g,%g,%g)", (double)x, (double)y,
+           (double)z, (double)w);
+  set_str(obj, key, buf);
+}
+
+static glm::quat get_quat(toon_value *obj, const char *key, glm::quat fallback) {
+  toon_value *v = toon_obj_get(obj, key);
+  if (!v || v->type != TOON_STRING || !v->str_val)
+    return fallback;
+  float vals[4];
+  if (sscanf(v->str_val, "@quat(%f,%f,%f,%f)", &vals[0], &vals[1], &vals[2],
+             &vals[3]) == 4)
+    return glm::quat(vals[3], vals[0], vals[1], vals[2]);
+  SDL_Log("Scene: invalid quat format in '%s' — expected @quat(x,y,z,w)", key);
+  return fallback;
+}
+
+static void set_color(toon_value *obj, const char *key, float r, float g,
+                      float b, float a) {
+  char buf[96];
+  snprintf(buf, sizeof(buf), "@color(%g,%g,%g,%g)", (double)r, (double)g,
+           (double)b, (double)a);
+  set_str(obj, key, buf);
+}
+
+static glm::vec4 get_color(toon_value *obj, const char *key, glm::vec4 fallback) {
+  toon_value *v = toon_obj_get(obj, key);
+  if (!v || v->type != TOON_STRING || !v->str_val)
+    return fallback;
+  float vals[4];
+  if (sscanf(v->str_val, "@color(%f,%f,%f,%f)", &vals[0], &vals[1], &vals[2],
+             &vals[3]) == 4)
+    return {vals[0], vals[1], vals[2], vals[3]};
+  return fallback;
+}
+
 // ── save ───────────────────────────────────────────────────────────────────
 
 bool Scene::save(const char *path) const {
@@ -144,13 +185,15 @@ bool Scene::save(const char *path) const {
       set_str(e, "name", ent.name.c_str());
     set_bool(e, "visible", ent.visible ? 1 : 0);
 
-    // Parent as stable name/id reference
+    // Parent as stable entity reference
     if (ent.parentIndex >= 0 && ent.parentIndex < (int)m_entities.size()) {
       const Entity &p = m_entities[ent.parentIndex];
       const char *pid = !p.id.empty() ? p.id.c_str()
                       : !p.name.empty() ? p.name.c_str() : nullptr;
-      if (pid)
-        set_str(e, "parent", pid);
+      if (pid) {
+        std::string ref = std::string("@entity(") + pid + ")";
+        set_str(e, "parent", ref.c_str());
+      }
     }
 
     // Transform: write only non-default fields
@@ -164,9 +207,12 @@ bool Scene::save(const char *path) const {
       if (hasPos)
         set_vec3(tf, "pos", r6(ent.transform.position.x),
                  r6(ent.transform.position.y), r6(ent.transform.position.z));
-      if (hasRot)
-        set_vec3(tf, "rot", r6(ent.transform.rotation.x),
-                 r6(ent.transform.rotation.y), r6(ent.transform.rotation.z));
+      if (hasRot) {
+        glm::quat q(glm::vec3(ent.transform.rotation.x,
+                              ent.transform.rotation.y,
+                              ent.transform.rotation.z));
+        set_quat(tf, "rot", r6(q.x), r6(q.y), r6(q.z), r6(q.w));
+      }
       if (hasScale)
         set_vec3(tf, "scale", r6(ent.transform.scale.x),
                  r6(ent.transform.scale.y), r6(ent.transform.scale.z));
@@ -181,7 +227,7 @@ bool Scene::save(const char *path) const {
       if (ent.meshSource.compare(0, 11, "@primitive(") == 0) {
         set_str(e, "mesh", ent.meshSource.c_str());
       } else {
-        std::string ref = "@asset(" + ent.meshSource + ")";
+        std::string ref = "@asset(assets://" + ent.meshSource + ")";
         set_str(e, "mesh", ref.c_str());
       }
     }
@@ -190,9 +236,9 @@ bool Scene::save(const char *path) const {
       toon_value *m = toon_obj_set(e, "material");
       m->type = TOON_OBJECT;
       set_str(m, "shader", ent.material->shaderName.c_str());
-      set_vec4(m, "base_color", ent.material->baseColor.x,
-               ent.material->baseColor.y, ent.material->baseColor.z,
-               ent.material->baseColor.w);
+      set_color(m, "base_color", ent.material->baseColor.x,
+                ent.material->baseColor.y, ent.material->baseColor.z,
+                ent.material->baseColor.w);
       set_num(m, "roughness", r6(ent.material->roughness));
       set_num(m, "metallic", r6(ent.material->metallic));
       auto saveTex = [&](const char *key, const std::string &src) {
@@ -223,8 +269,14 @@ bool Scene::load(const char *path) {
     toon_value *root = doc.get();
     toon_value *sv = toon_obj_get(root, "scene");
     if (sv && sv->type == TOON_OBJECT) {
-      globalLightDir = get_vec3(sv, "light_dir", globalLightDir);
-      globalLightColor = get_vec3(sv, "light_color", globalLightColor);
+      std::string schemaErrors;
+      if (!Schema::validateScene(sv, schemaErrors)) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Scene '%s' schema violations:\n%s", path,
+                    schemaErrors.c_str());
+      }
+      globalLightDir = get_vec3(sv, "light_dir", glm::vec3(0.0f));
+      globalLightColor = get_vec3(sv, "light_color", glm::vec3(0.0f));
     }
   }
 
@@ -265,8 +317,12 @@ bool Scene::load(const char *path) {
       le.ent.name = le.ent.id;
 
     toon_value *pv = toon_obj_get(e, "parent");
-    if (pv && pv->type == TOON_STRING && pv->str_val)
-      le.parentRef = pv->str_val;
+    if (pv && pv->type == TOON_STRING && pv->str_val) {
+      const char *ps = pv->str_val;
+      size_t plen = strlen(ps);
+      if (plen > 8 && strncmp(ps, "@entity(", 8) == 0 && ps[plen - 1] == ')')
+        le.parentRef = std::string(ps + 8, plen - 9);
+    }
 
     toon_value *vv = toon_obj_get(e, "visible");
     if (vv && vv->type == TOON_BOOL)
@@ -275,7 +331,10 @@ bool Scene::load(const char *path) {
     toon_value *tf = toon_obj_get(e, "transform");
     if (tf && tf->type == TOON_OBJECT) {
       le.ent.transform.position = get_vec3(tf, "pos", le.ent.transform.position);
-      le.ent.transform.rotation = get_vec3(tf, "rot", le.ent.transform.rotation);
+      {
+        glm::quat q = get_quat(tf, "rot", glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+        le.ent.transform.rotation = glm::eulerAngles(q);
+      }
       le.ent.transform.scale = get_vec3(tf, "scale", le.ent.transform.scale);
       le.ent.transform.angularVelocity =
           get_vec3(tf, "angular_velocity", le.ent.transform.angularVelocity);
@@ -287,13 +346,9 @@ bool Scene::load(const char *path) {
       size_t len = strlen(s);
       if (len > 11 && strncmp(s, "@primitive(", 11) == 0 && s[len - 1] == ')') {
         le.ent.meshSource = s;
-      } else if (len > 8 && strncmp(s, "@asset(", 7) == 0 && s[len - 1] == ')') {
-        std::string inner(s + 7, len - 8);
-        // Handle both @asset(path) and @asset("path") (legacy)
-        if (inner.size() >= 2 && inner.front() == '"' && inner.back() == '"')
-          le.ent.meshSource = inner.substr(1, inner.size() - 2);
-        else
-          le.ent.meshSource = inner;
+      } else if (len > 17 && strncmp(s, "@asset(assets://", 16) == 0 &&
+                 s[len - 1] == ')') {
+        le.ent.meshSource = std::string(s + 16, len - 17);
       }
     }
 
@@ -305,7 +360,7 @@ bool Scene::load(const char *path) {
       if (sh && sh->type == TOON_STRING && sh->str_val)
         m->shaderName = sh->str_val;
 
-      m->baseColor = get_vec4(mat, "base_color", m->baseColor);
+      m->baseColor = get_color(mat, "base_color", m->baseColor);
 
       toon_value *rgh = toon_obj_get(mat, "roughness");
       if (rgh && rgh->type == TOON_NUMBER)

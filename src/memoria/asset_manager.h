@@ -18,34 +18,56 @@ namespace Memoria {
 
 class AssetManager {
 public:
+  struct Manifest {
+    std::vector<std::string> preloadMeshes;
+    std::string defaultSkybox;
+  };
+
   struct SkyboxAsset {
     std::string name;
     std::string path;
     bool isHDR = false;
   };
 
+  struct SkyboxScanDir {
+    std::string path;
+    bool isHDR = false;
+  };
+
+  struct DefaultMaterial {
+    std::string shader = "pbr";
+    glm::vec4 baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
+    float roughness = 0.5f;
+    float metallic = 0.0f;
+  };
+
   AssetManager(Allocator &allocator, VkDevice device, VkQueue transferQueue,
                VkCommandPool transferPool);
   ~AssetManager();
 
+  bool loadManifest(const char *path, Mundus::Scene &scene);
+
+  const Manifest &getManifest() const { return m_manifest; }
+  const DefaultMaterial &getDefaultMaterial() const { return m_defaultMaterial; }
+  const std::vector<SkyboxScanDir> &getSkyboxScanDirs() const { return m_skyboxScanDirs; }
+  const std::vector<std::string> &getSkyboxFaceNames() const { return m_skyboxFaceNames; }
+
   std::shared_ptr<MeshAsset> createCubeMesh();
   std::shared_ptr<TextureAsset> loadTexture(const std::string &path,
-                                             bool srgb = true);
+                                              bool srgb = true);
   std::shared_ptr<TextureAsset> loadTextureFromMemory(const unsigned char *data,
-                                                       size_t size,
-                                                       const std::string &name,
-                                                       bool srgb = true);
+                                                        size_t size,
+                                                        const std::string &name,
+                                                        bool srgb = true);
   std::shared_ptr<TextureAsset> loadCubemap(const std::string &directoryPath);
   std::shared_ptr<TextureAsset> loadCubemapFromCross(const std::string &path);
   std::shared_ptr<TextureAsset> loadHDR(const std::string &path);
 
   std::vector<SkyboxAsset> scanSkyboxes() const;
 
-  // Mesh and texture resolution (resolve phase)
   std::shared_ptr<MeshAsset> getMesh(const std::string &source);
   std::shared_ptr<TextureAsset> resolveTexture(const std::string &source, bool srgb);
 
-  // GLTF Support
   void loadGLTF(const std::string &path, Mundus::Scene &scene,
                 int parentIndex = -1);
 
@@ -53,7 +75,6 @@ public:
     return m_textureLinearStore;
   }
 
-  // Default textures for PBR fallbacks
   std::shared_ptr<TextureAsset> getDefaultWhite() { return m_defaultWhiteSRGB; }
   std::shared_ptr<TextureAsset> getDefaultWhiteLinear() { return m_defaultWhiteLinear; }
   std::shared_ptr<TextureAsset> getDefaultBlack() { return m_defaultBlackSRGB; }
@@ -72,6 +93,11 @@ private:
   VkDevice m_device;
   VkQueue m_transferQueue;
   VkCommandPool m_transferPool;
+
+  Manifest m_manifest;
+  DefaultMaterial m_defaultMaterial;
+  std::vector<SkyboxScanDir> m_skyboxScanDirs;
+  std::vector<std::string> m_skyboxFaceNames;
 
   std::shared_ptr<TextureAsset> m_defaultWhiteSRGB;
   std::shared_ptr<TextureAsset> m_defaultWhiteLinear;

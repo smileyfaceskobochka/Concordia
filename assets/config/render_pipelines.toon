@@ -1,0 +1,27 @@
+pipelines[3]:
+  - name: "pbr"
+    vertex_shader: "assets://shaders/compiled/vert.spv"
+    fragment_shader: "assets://shaders/compiled/pbr_frag.spv"
+    depth_test: true
+    depth_write: true
+    depth_compare: "LESS"
+    cull_mode: "BACK"
+    push_constant_size: 160.0
+
+  - name: "skybox"
+    vertex_shader: "assets://shaders/compiled/skybox_vert.spv"
+    fragment_shader: "assets://shaders/compiled/skybox_frag.spv"
+    depth_test: true
+    depth_write: false
+    depth_compare: "ALWAYS"
+    cull_mode: "NONE"
+    push_constant_size: 160.0
+
+  - name: "skybox_hdri"
+    vertex_shader: "assets://shaders/compiled/skybox_vert.spv"
+    fragment_shader: "assets://shaders/compiled/skybox_hdri_frag.spv"
+    depth_test: true
+    depth_write: false
+    depth_compare: "ALWAYS"
+    cull_mode: "NONE"
+    push_constant_size: 160.0

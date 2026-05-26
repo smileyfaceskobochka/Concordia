@@ -64,6 +64,7 @@ private:
     std::vector<FileEntry> children;
   };
 
+  void loadUIConfig(const std::string &path);
   void scanDirTree(const std::string &rootPath,
                    std::vector<FileEntry> &entries);
   void drawDirTree(const std::vector<FileEntry> &entries);
@@ -73,6 +74,17 @@ private:
   int m_selectedEntity = -1;
 
   std::map<uint32_t, VkDescriptorSet> m_textureCache;
+
+  // Config-loaded values
+  float m_statsPadding = 10.0f;
+  float m_inspectorWidth = 350.0f;
+  glm::vec2 m_assetWindowSize = {420.0f, 320.0f};
+  int m_renameBufSize = 256;
+  float m_sliderSpeedMin = 0.1f;
+  float m_sliderSpeedMax = 50.0f;
+  float m_sliderSensMin = 0.01f;
+  float m_sliderSensMax = 1.0f;
+  std::vector<std::string> m_debugModes;
 
   // File browser
   std::vector<FileEntry> m_dirTree;

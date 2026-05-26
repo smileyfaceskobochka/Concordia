@@ -1,0 +1,17 @@
+preload_meshes[3]: "@primitive(cube)", "@asset(assets://models/gltf/DamagedHelmet.glb)", "@asset(assets://models/gltf/cube.glb)"
+
+default_skybox: "@asset(assets://images/skybox/cubemap/Cubemap_Sky_01-512x512.png)"
+
+skybox:
+  scan_directories[2]:
+    - path: "cubemap"
+      is_hdr: false
+    - path: "hdri"
+      is_hdr: true
+  face_names[6]: "px.png", "nx.png", "py.png", "ny.png", "pz.png", "nz.png"
+
+default_material:
+  shader: "pbr"
+  base_color: "@color(1,1,1,1)"
+  roughness: 0.5
+  metallic: 0.0

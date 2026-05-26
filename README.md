@@ -255,3 +255,58 @@ The engine gains a data layer. Scene state is now serialized to TOON, survives s
 * Migrated build system from CMake to xmake.
 * Editor tools: scene picking (`Mundus::pickEntity`), Blender-style keyboard shortcuts, entity inspector with debug channel visualization.
 * Config driven by `assets/config/engine.toon` (window, camera, renderer).
+
+---
+
+## 📅 Dev‑Log Entry: 26.05.26 (Late) — TOON Takes Over Config
+
+Every hardcoded value that had a reasonable home in a TOON file now lives there. Schema validation covers all config files. The engine loads its renderer state, UI layout, editor keybindings, and pipeline definitions from data, not source.
+
+<small>📄 No more magic numbers. No more `#define` defaults. Just data.</small>
+
+### What Achieved
+
+#### 1. Schema Validation Framework (`Mundus::Schema`)
+* Added `validateUI()`, `validateEditorKeys()`, `validateRenderPipelines()` — full field-type checking for every TOON config file.
+* Schema enforcement is non-fatal: violations log warnings but don't block loading.
+* `Vec2` type added alongside existing Vec3/4/Color/Quat/Asset/Entity/Primitive.
+
+#### 2. Engine Config Extended (`engine.toon`)
+* **Renderer:** `exposure`, `gamma`, `clear_color` (`@color`), `max_bindless_textures`, `depth_format`.
+* **Scene:** `default_path` (asset URI), `auto_save` flag.
+* **Lighting:** `default_direction` (`@vec3`), `default_color` (`@vec3`).
+* **Skybox:** `default_scale` (`@vec3`).
+* **Camera:** `default_position` (`@vec3`), `default_yaw`, `min_pitch`, `max_pitch` — camera init fully data-driven.
+* Fallback defaults removed from C++ — engine uses `m_config.get_number(key, fallback)` only for safety.
+
+#### 3. UI Config (`ui.toon`)
+* Font loading (JetBrains Mono + Lucide icons merged), padding, rounding, scrollbar/grab sizes.
+* Window layout: stats padding, inspector width, asset manager window size (`@vec2`), rename buffer size.
+* Slider ranges for move speed and sensitivity in controls panel.
+* Debug mode labels fetched from config (no more hardcoded `modes[]` array).
+* Descriptor pool sizes (sets, samplers, combined image samplers) configurable.
+
+#### 4. Editor Keys Config (`editor_keys.toon`)
+* Camera movement keys (WASD, Space, LShift) and capture exit key.
+* 8 action bindings: delete (DEL/X), toggle visibility (H), show all (Alt+H), toggle selection (A), focus camera (GRAVE), duplicate (Shift+D).
+* `EditorKeyConfig` struct loaded once via `static` in `processEditorKeys()`.
+
+#### 5. Render Pipeline Config (`render_pipelines.toon`)
+* Three pipeline definitions: `pbr`, `skybox`, `skybox_hdri`.
+* Each specifies: vertex/fragment shader paths (asset URIs), depth test/write state, compare op, cull mode, push constant size.
+* `initPipeline()` parses VkCompareOp and VkCullModeFlags from string names.
+* Falls back to hardcoded defaults if the TOON file is missing.
+
+#### 6. Asset Manifest Extended (`assets.toon`)
+* `skybox.scan_directories` — array of `{path, is_hdr}` entries replaces the hardcoded `"cubemap"` / `"hdri"` scan paths.
+* `skybox.face_names[6]` — configurable face file names for individual cubemap loading.
+* `default_material` — shader, base_color, roughness, metallic defaults.
+* `scanSkyboxes()` and `loadCubemap()` use config-driven directories and face names.
+
+#### 7. xmake `generate-defaults` Task
+* Generates all 6 TOON files (`engine.toon`, `assets.toon`, `ui.toon`, `editor_keys.toon`, `render_pipelines.toon`, `default.scene`) if missing.
+
+#### 8. Infrastructure
+* `Camara::setPosition()`, `setYaw()`, `setPitchClamp()` added for data-driven initialization.
+* `obj_str()`, `obj_num()`, `obj_bool()` helper wrappers for type-safe field extraction from raw ctoon nodes.
+* `render_pipelines.toon` path resolution handles both `assets://` and `@asset(assets://)` formats.

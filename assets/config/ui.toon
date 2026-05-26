@@ -1,0 +1,32 @@
+fonts[2]:
+  - path: "assets/fonts/JetBrainsMonoNF/JetBrainsMonoNerdFont-Regular.ttf"
+    size: 16.0
+    glyph_offset_y: 0.0
+    merge_mode: false
+  - path: "assets/fonts/lucide/lucide.ttf"
+    size: 16.0
+    glyph_offset_y: 2.0
+    merge_mode: true
+
+frame_padding: 6.0
+item_spacing: 8.0
+window_rounding: 6.0
+frame_rounding: 3.0
+scrollbar_size: 12.0
+grab_min_size: 8.0
+
+stats_padding: 10.0
+inspector_width: 350.0
+asset_window_size: "@vec2(420,320)"
+rename_buf_size: 256.0
+
+slider_speed_min: 0.1
+slider_speed_max: 50.0
+slider_sens_min: 0.01
+slider_sens_max: 1.0
+
+debug_modes[5]: "None", "Metallic", "Roughness", "Normals", "Vertex Color"
+
+descriptor_pool_sets: 11000.0
+descriptor_pool_samplers: 1000.0
+descriptor_pool_combined_image_samplers: 1000.0

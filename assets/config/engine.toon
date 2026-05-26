@@ -11,6 +11,11 @@ renderer:
   debug_mode: false
   enable_validation: true
   preferred_gpu: 0
+  exposure: 1.0
+  gamma: 2.2
+  clear_color: "@color(0.01,0.01,0.01,1.0)"
+  max_bindless_textures: 1024
+  depth_format: "D32_SFLOAT"
 
 camera:
   fov: 60.0
@@ -18,3 +23,18 @@ camera:
   far: 1000.0
   sensitivity: 0.4
   speed: 5.0
+  default_position: "@vec3(0,0,2)"
+  default_yaw: -90.0
+  min_pitch: -89.0
+  max_pitch: 89.0
+
+scene:
+  default_path: "assets://scenes/default.toon"
+  auto_save: true
+
+lighting:
+  default_direction: "@vec3(-0.5,-1,-0.2)"
+  default_color: "@vec3(1,1,1)"
+
+skybox:
+  default_scale: "@vec3(10,10,10)"
