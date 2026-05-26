@@ -212,3 +212,46 @@ The engine continues to evolve, moving towards a stricter, more modern asset pip
 #### 3. Engine Noise Reduction
 * Purged per-frame `drawFrame` logs that were flooding the console.
 * Refined GLTF normal loading and verification.
+
+---
+
+## 📅 Dev‑Log Entry: 26.05.26 - TOON Serialization & 3-Phase Scene Pipeline
+
+The engine gains a data layer. Scene state is now serialized to TOON, survives shutdown, and resolves back into GPU-ready resources on load.
+
+<small>📄 Data describes. Schema validates. The compiler enforces.</small>
+
+### What Achieved
+
+#### 1. TOON Integration (`Auxilia`)
+* Added `ctoon` as a git submodule (`third_party/ctoon`) — C99 serializer/deserializer.
+* Built a C++ RAII wrapper `Auxilia::toon_doc` with typed accessors, dot-path navigation, and file I/O.
+* TOON is now the engine's scene IR, config format, and serialization layer.
+
+#### 2. Scene Save/Load (`Mundus`)
+* `Scene::save()` and `Scene::load()` produce/consume TOON files.
+* Entity fields: stable `id`, `name`, name-based `parent`, `transform`, `meshSource`, `material`.
+* Tagged type system: `@vec3(x,y,z)`, `@vec4(x,y,z,w)`, `@primitive(tag)`, `@asset(path)` — all plugin-level tagged strings, not core syntax.
+* Strict parsing — no fallback, no backward-compat beyond explicit legacy handling.
+
+#### 3. 3-Phase Pipeline (Load → Resolve → Upload)
+* **Phase 1 (Load):** TOON produces data-only entity tree — no GPU work.
+* **Phase 2 (Resolve):** `Engine::resolveSceneMeshes()` converts `meshSource` → mesh handles via `AssetManager::getMesh()`, and texture sources → `TextureAsset` via `resolveTexture()`.
+* **Phase 3 (Upload):** `updateBindlessDescriptorSet()` syncs textures to GPU.
+* Mesh/texture fields are references only until explicit resolve.
+
+#### 4. Texture Round-Trip
+* `Forma::Material` gained `albedoSource`, `normalSource`, etc. — texture paths saved to TOON and resolved on load.
+* Embedded GLTF textures use stable `embedded_img_N` naming (image index, not pointer address) so cache keys survive reloads.
+* `resolveTexture()` checks in-memory cache first, falls back to `loadTexture()` with asset-dir path resolution.
+
+#### 5. Format Design Choices
+* `@primitive(cube)` — flat tagged string, not nested `{primitive: cube}` object.
+* `@asset(models/gltf/foo.glb)` — relative URI, no embedded quotes, no `\"` escaping issues, no absolute filesystem paths.
+* Identity/default transform fields omitted on save (scale=1, pos/rot/angvel=0).
+* Floats rounded to 6dp to prevent precision leakage (`0.35` not `0.3499999940395355`).
+
+#### 6. Infrastructure
+* Migrated build system from CMake to xmake.
+* Editor tools: scene picking (`Mundus::pickEntity`), Blender-style keyboard shortcuts, entity inspector with debug channel visualization.
+* Config driven by `assets/config/engine.toon` (window, camera, renderer).
