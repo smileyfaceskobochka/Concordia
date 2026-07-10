@@ -1,18 +1,19 @@
 #pragma once
 
 #include "allocator.h"
+#include <flecs.h>
 #include <forma/mesh.h>
 #include <string>
 #include <vk_mem_alloc.h>
-
-namespace Mundus {
-class Scene;
-}
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
 #include "types.h"
+
+namespace Mundus {
+struct ShaderAsset;
+}
 
 namespace Memoria {
 
@@ -45,7 +46,7 @@ public:
                VkCommandPool transferPool);
   ~AssetManager();
 
-  bool loadManifest(const char *path, Mundus::Scene &scene);
+  bool loadManifest(const char *path, flecs::world &ecs);
 
   const Manifest &getManifest() const { return m_manifest; }
   const DefaultMaterial &getDefaultMaterial() const { return m_defaultMaterial; }
@@ -67,9 +68,10 @@ public:
 
   std::shared_ptr<MeshAsset> getMesh(const std::string &source);
   std::shared_ptr<TextureAsset> resolveTexture(const std::string &source, bool srgb);
+  std::shared_ptr<Mundus::ShaderAsset> loadShader(const std::string &path);
 
-  void loadGLTF(const std::string &path, Mundus::Scene &scene,
-                int parentIndex = -1);
+  void loadGLTF(const std::string &path, flecs::world &ecs,
+                flecs::entity_t parent = 0, bool instantiate = true);
 
   const std::vector<std::shared_ptr<TextureAsset>> &getLoadedTextures() const {
     return m_textureLinearStore;
@@ -108,6 +110,7 @@ private:
 
   std::unordered_map<std::string, std::shared_ptr<MeshAsset>> m_meshes;
   std::unordered_map<std::string, std::shared_ptr<TextureAsset>> m_textures;
+  std::unordered_map<std::string, std::shared_ptr<Mundus::ShaderAsset>> m_shaders;
   std::vector<std::shared_ptr<MeshAsset>> m_meshStore;
   std::vector<std::shared_ptr<TextureAsset>> m_textureLinearStore;
 };

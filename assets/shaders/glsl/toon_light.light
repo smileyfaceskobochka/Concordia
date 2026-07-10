@@ -1,0 +1,26 @@
+void light(
+    inout vec3 diffuse, 
+    inout vec3 specular, 
+    vec3 light_dir, 
+    vec3 light_color, 
+    float attenuation, 
+    vec3 normal, 
+    vec3 view, 
+    float roughness
+) {
+    float NdotL = max(dot(normal, light_dir), 0.0);
+    
+    // Stepped toon diffuse shading bands
+    float toonDiff = 0.0;
+    if (NdotL > 0.6) {
+        toonDiff = 1.0;
+    } else if (NdotL > 0.25) {
+        toonDiff = 0.5;
+    } else {
+        toonDiff = 0.1;
+    }
+
+    // Accumulate diffuse lighting using step value, zero specular contribution
+    diffuse += (ALBEDO / 3.14159265359) * light_color * attenuation * toonDiff;
+    specular += vec3(0.0);
+}

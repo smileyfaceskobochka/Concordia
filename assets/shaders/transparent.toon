@@ -1,0 +1,16 @@
+shader:
+  version: 1
+  name: "transparent"
+  stages:
+    vertex: "@asset(assets://shaders/glsl/pbr.vert)"
+    fragment: "@asset(assets://shaders/glsl/pbr.frag)"
+  render_state:
+    depth_test: true
+    depth_write: false
+    cull_mode: "none"
+    front_face: "ccw"
+    blend_mode: "blend"
+  defaults:
+    baseColor: "@color(1,1,1,1)"
+    roughness: 0.5
+    metallic: 0.0

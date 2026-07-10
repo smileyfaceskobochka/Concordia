@@ -1,0 +1,14 @@
+shader:
+  version: 1
+  name: "skybox_hdri"
+  stages:
+    vertex: "@asset(assets://shaders/glsl/skybox.vert)"
+    fragment: "@asset(assets://shaders/glsl/skybox_hdri.frag)"
+    light: "@asset(assets://shaders/glsl/skybox.light)"
+  render_state:
+    depth_test: true
+    depth_write: false
+    depth_compare: "less_or_equal"
+    cull_mode: "none"
+    front_face: "ccw"
+    blend_mode: "opaque"

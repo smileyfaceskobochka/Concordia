@@ -27,6 +27,7 @@ target("Concordia")
     add_files("third_party/imgui/backends/imgui_impl_sdl3.cpp")
     add_files("third_party/imgui/backends/imgui_impl_vulkan.cpp")
     add_files("third_party/vk-bootstrap/src/VkBootstrap.cpp")
+    add_files("third_party/flecs/distr/flecs.c")
 
     add_includedirs("src")
     add_includedirs("third_party/imgui")
@@ -38,6 +39,7 @@ target("Concordia")
     add_includedirs("third_party/Vulkan-Headers/include")
     add_includedirs("third_party/vk-bootstrap/src")
     add_includedirs("third_party/ctoon")
+    add_includedirs("third_party/flecs/distr")
 
     add_defines([[CONCORDIA_ASSETS_DIR="$(projectdir)/assets"]])
 
@@ -58,36 +60,6 @@ target("Concordia")
     end
 
     before_build(function(target)
-        import("lib.detect.find_tool")
-
-        -- Shaders
-        local glslc = find_tool("glslc")
-        if not glslc then
-            raise("glslc not found - install Vulkan SDK or add VULKAN_SDK/bin to PATH")
-        end
-        local shader_dir = path.join(os.projectdir(), "assets/shaders")
-        local compiled_dir = path.join(shader_dir, "compiled")
-        os.mkdir(compiled_dir)
-        for _, src in ipairs(os.files(path.join(shader_dir, "*.glsl"))) do
-            local fn = path.filename(src)
-            local base = path.basename(src)
-            local stage
-            if fn:find("vert") then
-                stage = "vertex"
-            elseif fn:find("frag") then
-                stage = "fragment"
-            elseif fn:find("comp") then
-                stage = "compute"
-            elseif fn:find("geom") then
-                stage = "geometry"
-            end
-            if stage then
-                local out = path.join(compiled_dir, base .. ".spv")
-                print("  glslc: " .. fn .. " -> " .. path.filename(out))
-                os.execv(glslc.program, {"-fshader-stage=" .. stage, src, "-o", out})
-            end
-        end
-
         -- SDL3 via CMake
         if not os.isdir(sdl_build_dir) then
             os.mkdir(sdl_build_dir)
@@ -216,15 +188,10 @@ task("generate-defaults")
 
         local uipath = assets .. "/config/ui.toon"
         if not os.exists(uipath) then
-            io.writefile(uipath, "fonts[2]:\n" ..
+            io.writefile(uipath, "fonts[1]:\n" ..
                 "  - path: \"assets/fonts/JetBrainsMonoNF/JetBrainsMonoNerdFont-Regular.ttf\"\n" ..
                 "    size: 16.0\n" ..
                 "    glyph_offset_y: 0.0\n" ..
-                "    merge_mode: false\n" ..
-                "  - path: \"assets/fonts/lucide/lucide.ttf\"\n" ..
-                "    size: 16.0\n" ..
-                "    glyph_offset_y: 2.0\n" ..
-                "    merge_mode: true\n" ..
                 "\n" ..
                 "frame_padding: 6.0\n" ..
                 "item_spacing: 8.0\n" ..

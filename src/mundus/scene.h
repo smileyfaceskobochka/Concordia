@@ -1,14 +1,15 @@
 #pragma once
 
 #include "entity.h"
-#include "auxilia/toon.hpp"
+#include "auxilia/ctoon.hpp"
+#include <algorithm>
 #include <memory>
 #include <vector>
 
 // ── Scene Loading Pipeline ─────────────────────────────────────────────
 //
 // 1. LOAD phase   (CPU-only, deterministic)
-//    TOON produces: entity tree, transforms, materials,
+//    CTOON produces: entity tree, transforms, materials,
 //                   mesh/file references, primitive tags.
 //    NO GPU work. All fields parsed as references only.
 //
@@ -67,23 +68,35 @@ public:
   bool removeEntity(int index) {
     if (index < 0 || index >= static_cast<int>(m_entities.size()))
       return false;
-    if (m_entities[index].parentIndex >= 0) {
-      auto &siblings = m_entities[m_entities[index].parentIndex].children;
-      for (auto it = siblings.begin(); it != siblings.end();) {
-        if (*it == index)
-          it = siblings.erase(it);
-        else
-          ++it;
+
+    std::vector<bool> keep(m_entities.size(), true);
+    std::function<void(int)> mark = [&](int idx) {
+      keep[idx] = false;
+      for (int child : m_entities[idx].children)
+        mark(child);
+    };
+    mark(index);
+
+    std::vector<int> newIdx(m_entities.size(), -1);
+    std::vector<Entity> survivors;
+    for (size_t i = 0; i < m_entities.size(); ++i) {
+      if (keep[i]) {
+        newIdx[i] = (int)survivors.size();
+        survivors.push_back(std::move(m_entities[i]));
       }
     }
-    m_entities.erase(m_entities.begin() + index);
-    for (auto &ent : m_entities) {
-      if (ent.parentIndex > index)
-        --ent.parentIndex;
+
+    for (auto &ent : survivors) {
+      if (ent.parentIndex >= 0)
+        ent.parentIndex = keep[ent.parentIndex] ? newIdx[ent.parentIndex] : -1;
       for (auto &child : ent.children)
-        if (child > index)
-          --child;
+        child = newIdx[child];
+      auto it = std::remove_if(ent.children.begin(), ent.children.end(),
+                                [](int c) { return c < 0; });
+      ent.children.erase(it, ent.children.end());
     }
+
+    m_entities = std::move(survivors);
     return true;
   }
 

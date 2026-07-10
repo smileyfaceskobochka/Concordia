@@ -280,7 +280,7 @@ Every hardcoded value that had a reasonable home in a TOON file now lives there.
 * Fallback defaults removed from C++ — engine uses `m_config.get_number(key, fallback)` only for safety.
 
 #### 3. UI Config (`ui.toon`)
-* Font loading (JetBrains Mono + Lucide icons merged), padding, rounding, scrollbar/grab sizes.
+* Font loading (JetBrains Mono with Nerd Font icons), padding, rounding, scrollbar/grab sizes.
 * Window layout: stats padding, inspector width, asset manager window size (`@vec2`), rename buffer size.
 * Slider ranges for move speed and sensitivity in controls panel.
 * Debug mode labels fetched from config (no more hardcoded `modes[]` array).

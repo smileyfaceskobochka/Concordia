@@ -1,0 +1,16 @@
+shader:
+  version: 1
+  name: "pbr"
+  stages:
+    vertex: "@asset(assets://shaders/glsl/pbr.vert)"
+    fragment: "@asset(assets://shaders/glsl/pbr.frag)"
+  render_state:
+    depth_test: true
+    depth_write: true
+    cull_mode: "back"
+    front_face: "ccw"
+    blend_mode: "opaque"
+  defaults:
+    baseColor: "@color(1,1,1,1)"
+    roughness: 0.5
+    metallic: 0.0

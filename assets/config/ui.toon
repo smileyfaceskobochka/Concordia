@@ -1,12 +1,7 @@
-fonts[2]:
+fonts[1]:
   - path: "assets/fonts/JetBrainsMonoNF/JetBrainsMonoNerdFont-Regular.ttf"
     size: 16.0
     glyph_offset_y: 0.0
-    merge_mode: false
-  - path: "assets/fonts/lucide/lucide.ttf"
-    size: 16.0
-    glyph_offset_y: 2.0
-    merge_mode: true
 
 frame_padding: 6.0
 item_spacing: 8.0

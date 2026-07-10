@@ -1,96 +1,83 @@
 #include "editor_keys.h"
-#include "auxilia/toon.hpp"
-#include "mundus/schema.h"
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
+#include "auxilia/ctoon.hpp"
+#include <cstdio>
+#include <cstring>
 #include <unordered_map>
+
+#ifndef CONCORDIA_ASSETS_DIR
+#define CONCORDIA_ASSETS_DIR "assets"
+#endif
+
+// ── helpers ──────────────────────────────────────────────────────────────
+
+static inline const char *obj_str(ctoon_value *obj, const char *key) {
+  ctoon_value *v = ctoon_obj_get(obj, key);
+  return v && v->type == CTOON_STRING ? v->str_val : nullptr;
+}
+static inline double obj_num(ctoon_value *obj, const char *key, double def) {
+  ctoon_value *v = ctoon_obj_get(obj, key);
+  return v && v->type == CTOON_NUMBER ? v->num_val : def;
+}
+static inline bool obj_bool(ctoon_value *obj, const char *key, bool def) {
+  ctoon_value *v = ctoon_obj_get(obj, key);
+  return v && v->type == CTOON_BOOL ? v->bool_val : def;
+}
+
+static const std::unordered_map<std::string, SDL_Keycode> keyMap = {
+  {"A", SDLK_A}, {"B", SDLK_B}, {"C", SDLK_C}, {"D", SDLK_D},
+  {"E", SDLK_E}, {"F", SDLK_F}, {"G", SDLK_G}, {"H", SDLK_H},
+  {"I", SDLK_I}, {"J", SDLK_J}, {"K", SDLK_K}, {"L", SDLK_L},
+  {"M", SDLK_M}, {"N", SDLK_N}, {"O", SDLK_O}, {"P", SDLK_P},
+  {"Q", SDLK_Q}, {"R", SDLK_R}, {"S", SDLK_S}, {"T", SDLK_T},
+  {"U", SDLK_U}, {"V", SDLK_V}, {"W", SDLK_W}, {"X", SDLK_X},
+  {"Y", SDLK_Y}, {"Z", SDLK_Z},
+  {"SPACE", SDLK_SPACE}, {"ESCAPE", SDLK_ESCAPE},
+  {"DELETE", SDLK_DELETE}, {"GRAVE", SDLK_GRAVE},
+  {"LSHIFT", SDLK_LSHIFT}, {"RSHIFT", SDLK_RSHIFT},
+};
 
 namespace Vigil {
 
-static inline const char *obj_str(toon_value *obj, const char *key) {
-  toon_value *v = toon_obj_get(obj, key);
-  return v && v->type == TOON_STRING ? v->str_val : nullptr;
-}
-static inline double obj_num(toon_value *obj, const char *key, double def = 0.0) {
-  toon_value *v = toon_obj_get(obj, key);
-  return v && v->type == TOON_NUMBER ? v->num_val : def;
-}
-static inline bool obj_bool(toon_value *obj, const char *key, bool def = false) {
-  toon_value *v = toon_obj_get(obj, key);
-  return v && v->type == TOON_BOOL ? v->bool_val : def;
-}
-
-static SDL_Keycode parseKey(const std::string &name) {
-  static const std::unordered_map<std::string, SDL_Keycode> table = {
-    {"W", SDLK_W}, {"S", SDLK_S}, {"A", SDLK_A}, {"D", SDLK_D},
-    {"SPACE", SDLK_SPACE}, {"LSHIFT", SDLK_LSHIFT}, {"RSHIFT", SDLK_RSHIFT},
-    {"ESCAPE", SDLK_ESCAPE}, {"DELETE", SDLK_DELETE}, {"X", SDLK_X},
-    {"H", SDLK_H}, {"GRAVE", SDLK_GRAVE},
-    {"LCTRL", SDLK_LCTRL}, {"RCTRL", SDLK_RCTRL},
-    {"LALT", SDLK_LALT}, {"RALT", SDLK_RALT},
-  };
-  auto it = table.find(name);
-  if (it != table.end()) return it->second;
-  if (name.size() == 1) return (SDL_Keycode)name[0];
-  return SDLK_UNKNOWN;
-}
-
 EditorKeyConfig loadEditorKeyConfig(const std::string &path) {
   EditorKeyConfig cfg;
-  Auxilia::toon_doc doc;
-  if (!doc.load_file(path.c_str()))
-    return cfg;
+  Auxilia::ctoon_doc doc;
+  if (!doc.load_file(path.c_str())) return cfg;
 
-  std::string errors;
-  if (!Mundus::Schema::validateEditorKeys(doc.get(), errors)) {
-    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                "Editor keys schema violations:\n%s", errors.c_str());
-  }
+  auto readKey = [&](const char *key_name, SDL_Keycode fallback) {
+    const char *s = doc.get_string(key_name);
+    if (!s) return fallback;
+    auto it = keyMap.find(s);
+    return it != keyMap.end() ? it->second : fallback;
+  };
 
-  {
-    auto s = doc.get_string("camera_forward");
-    if (s) cfg.cameraForward = parseKey(s);
-  }
-  {
-    auto s = doc.get_string("camera_backward");
-    if (s) cfg.cameraBackward = parseKey(s);
-  }
-  {
-    auto s = doc.get_string("camera_left");
-    if (s) cfg.cameraLeft = parseKey(s);
-  }
-  {
-    auto s = doc.get_string("camera_right");
-    if (s) cfg.cameraRight = parseKey(s);
-  }
-  {
-    auto s = doc.get_string("camera_up");
-    if (s) cfg.cameraUp = parseKey(s);
-  }
-  {
-    auto s = doc.get_string("camera_down");
-    if (s) cfg.cameraDown = parseKey(s);
-  }
-  {
-    auto s = doc.get_string("capture_exit");
-    if (s) cfg.captureExit = parseKey(s);
-  }
+  cfg.cameraForward = readKey("camera_forward", SDLK_W);
+  cfg.cameraBackward = readKey("camera_backward", SDLK_S);
+  cfg.cameraLeft = readKey("camera_left", SDLK_A);
+  cfg.cameraRight = readKey("camera_right", SDLK_D);
+  cfg.cameraUp = readKey("camera_up", SDLK_SPACE);
+  cfg.cameraDown = readKey("camera_down", SDLK_LSHIFT);
+  cfg.captureExit = readKey("capture_exit", SDLK_ESCAPE);
 
-  toon_value *arr = toon_obj_get(doc.get(), "bindings");
-  if (arr && arr->type == TOON_ARRAY) {
-    for (size_t i = 0; i < arr->len; ++i) {
-      toon_value *e = &arr->arr[i];
-      EditorKeyBinding b;
-      const char *action = obj_str(e, "action");
-      const char *key = obj_str(e, "key");
-      if (!action || !key) continue;
-      b.action = action;
-      b.key = parseKey(key);
-      b.ctrl = obj_bool(e, "ctrl", false);
-      b.shift = obj_bool(e, "shift", false);
-      b.alt = obj_bool(e, "alt", false);
-      cfg.bindings.push_back(b);
-    }
+  ctoon_value *root = doc.get();
+  ctoon_value *barr = root ? ctoon_obj_get(root, "bindings") : nullptr;
+  if (!barr || barr->type != CTOON_ARRAY) return cfg;
+
+  for (size_t i = 0; i < barr->len; ++i) {
+    ctoon_value *b = &barr->arr[i];
+    if (b->type != CTOON_OBJECT) continue;
+    const char *action = obj_str(b, "action");
+    const char *key_str = obj_str(b, "key");
+    if (!action || !key_str) continue;
+
+    EditorKeyBinding kb;
+    kb.action = action;
+    auto it = keyMap.find(key_str);
+    if (it == keyMap.end()) continue;
+    kb.key = it->second;
+    kb.ctrl = obj_bool(b, "ctrl", false);
+    kb.shift = obj_bool(b, "shift", false);
+    kb.alt = obj_bool(b, "alt", false);
+    cfg.bindings.push_back(kb);
   }
 
   return cfg;
@@ -99,72 +86,106 @@ EditorKeyConfig loadEditorKeyConfig(const std::string &path) {
 bool processEditorKeys(const SDL_Event &ev, bool imguiCapturesKeyboard,
                        bool imguiCapturesMouse, bool inputCaptured,
                        Vigil::Overlay &overlay,
-                       Mundus::Scene &scene, Vista::Camera &camera) {
+                       flecs::world &ecs,
+                       Vista::Camera &camera) {
+  if (inputCaptured) return false;
   if (ev.type != SDL_EVENT_KEY_DOWN) return false;
-  if (imguiCapturesKeyboard || inputCaptured) return false;
+  if (imguiCapturesKeyboard) return false;
 
+  SDL_Keycode key = ev.key.key;
   bool ctrl = (ev.key.mod & SDL_KMOD_CTRL) != 0;
   bool shift = (ev.key.mod & SDL_KMOD_SHIFT) != 0;
   bool alt = (ev.key.mod & SDL_KMOD_ALT) != 0;
-  SDL_Keycode k = ev.key.key;
 
-  // Load config once (static)
-  static EditorKeyConfig cfg = loadEditorKeyConfig(
-      std::string(CONCORDIA_ASSETS_DIR) + "/config/editor_keys.toon");
+  static EditorKeyConfig config;
+  [[maybe_unused]] static bool loaded = [&]() {
+    std::string cfgPath = std::string(CONCORDIA_ASSETS_DIR) + "/config/editor_keys.toon";
+    config = loadEditorKeyConfig(cfgPath);
+    return true;
+  }();
 
-  // Process bindings
-  for (auto &b : cfg.bindings) {
-    if (k != b.key) continue;
+  for (auto &b : config.bindings) {
+    if (b.key != key) continue;
     if (b.ctrl != ctrl) continue;
     if (b.shift != shift) continue;
     if (b.alt != alt) continue;
 
     if (b.action == "delete") {
-      int sel = overlay.getSelectedEntity();
-      if (sel >= 0) {
-        scene.removeEntity(sel);
-        overlay.setSelectedEntity(-1);
+      flecs::entity sel = overlay.getSelectedEntity();
+      if (sel.is_alive()) {
+        std::function<void(flecs::entity)> destroyTree;
+        destroyTree = [&](flecs::entity ent) {
+          ent.children([&](flecs::entity child) { destroyTree(child); });
+          ent.destruct();
+        };
+        destroyTree(sel);
+        overlay.setSelectedEntity(flecs::entity());
       }
       return true;
     }
 
     if (b.action == "toggle_visibility") {
-      int sel = overlay.getSelectedEntity();
-      if (sel >= 0 && sel < static_cast<int>(scene.getEntities().size()))
-        scene.setEntityVisible(sel, !scene.getEntities()[sel].visible);
+      flecs::entity sel = overlay.getSelectedEntity();
+      if (sel.is_alive()) {
+        auto &v = sel.get_mut<Mundus::Visibility>();
+        v.visible = !v.visible;
+      }
       return true;
     }
 
     if (b.action == "show_all") {
-      for (auto &ent : scene.getEntities())
-        ent.visible = true;
+      ecs.each([](flecs::entity e, Mundus::Visibility &v) {
+        (void)e;
+        v.visible = true;
+      });
       return true;
     }
 
     if (b.action == "toggle_selection") {
-      int current = overlay.getSelectedEntity();
-      if (current >= 0)
-        overlay.setSelectedEntity(-1);
-      else if (!scene.getEntities().empty())
-        overlay.setSelectedEntity(0);
+      flecs::entity sel = overlay.getSelectedEntity();
+      if (sel.is_alive())
+        overlay.setSelectedEntity(flecs::entity());
+      else {
+        ecs.query_builder<>().with<Mundus::Name>().build()
+          .each([&](flecs::iter &it, size_t row) {
+            overlay.setSelectedEntity(it.entity(row));
+          });
+      }
       return true;
     }
 
     if (b.action == "focus_camera") {
-      int sel = overlay.getSelectedEntity();
-      if (sel >= 0 && sel < static_cast<int>(scene.getEntities().size())) {
-        glm::vec3 target = scene.getEntities()[sel].transform.position;
-        glm::vec3 eye = target + glm::vec3(2.0f, 1.0f, 2.0f);
-        camera.lookAt(eye, target, glm::vec3(0.0f, 1.0f, 0.0f));
+      flecs::entity sel = overlay.getSelectedEntity();
+      if (sel.is_alive()) {
+        const Mundus::GlobalTransform *gt = sel.try_get<Mundus::GlobalTransform>();
+        if (gt) {
+          glm::vec3 target(gt->value[3][0], gt->value[3][1], gt->value[3][2]);
+          glm::vec3 eye = target + glm::vec3(2.0f, 1.0f, 2.0f);
+          camera.lookAt(eye, target, glm::vec3(0.0f, 1.0f, 0.0f));
+        }
       }
       return true;
     }
 
     if (b.action == "duplicate") {
-      int sel = overlay.getSelectedEntity();
-      if (sel >= 0) {
-        int dup = scene.duplicateEntity(sel);
-        if (dup >= 0) overlay.setSelectedEntity(dup);
+      flecs::entity sel = overlay.getSelectedEntity();
+      if (sel.is_alive()) {
+        const Mundus::Name *n = sel.try_get<Mundus::Name>();
+        if (n) {
+          flecs::entity dup = ecs.entity((n->value + "_copy").c_str())
+            .set<Mundus::Name>({n->value + "_copy"});
+          const Mundus::Transform *t = sel.try_get<Mundus::Transform>();
+          if (t) dup.set<Mundus::Transform>(*t);
+          const Mundus::Visibility *v = sel.try_get<Mundus::Visibility>();
+          if (v) dup.set<Mundus::Visibility>(*v);
+          const Mundus::MeshSource *ms = sel.try_get<Mundus::MeshSource>();
+          if (ms) dup.set<Mundus::MeshSource>(*ms);
+          const Mundus::MeshAssetRef *mar = sel.try_get<Mundus::MeshAssetRef>();
+          if (mar) dup.set<Mundus::MeshAssetRef>(*mar);
+          const Mundus::MaterialRef *mr = sel.try_get<Mundus::MaterialRef>();
+          if (mr) dup.set<Mundus::MaterialRef>(*mr);
+          overlay.setSelectedEntity(dup);
+        }
       }
       return true;
     }

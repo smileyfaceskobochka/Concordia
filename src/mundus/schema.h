@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-struct toon_value;
+struct ctoon_value;
 
 namespace Mundus {
 namespace Schema {
@@ -28,12 +28,13 @@ struct Field {
   bool required;
 };
 
-bool validateScene(toon_value *sceneVal, std::string &errors);
-bool validateConfig(toon_value *cfgRoot, std::string &errors);
-bool validateManifest(toon_value *manifestVal, std::string &errors);
-bool validateUI(toon_value *uiVal, std::string &errors);
-bool validateEditorKeys(toon_value *keysVal, std::string &errors);
-bool validateRenderPipelines(toon_value *pipelinesVal, std::string &errors);
+bool validateScene(ctoon_value *sceneVal, std::string &errors);
+bool validateConfig(ctoon_value *cfgRoot, std::string &errors);
+bool validateManifest(ctoon_value *manifestVal, std::string &errors);
+bool validateUI(ctoon_value *uiVal, std::string &errors);
+bool validateEditorKeys(ctoon_value *keysVal, std::string &errors);
+bool validateRenderPipelines(ctoon_value *pipelinesVal, std::string &errors);
+bool validateShader(ctoon_value *shaderVal, std::string &errors);
 
 } // namespace Schema
 } // namespace Mundus

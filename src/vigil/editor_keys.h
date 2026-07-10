@@ -1,7 +1,8 @@
 #pragma once
 #include "vigil/overlay.h"
-#include "mundus/scene.h"
+#include "mundus/components.h"
 #include "vista/camera.h"
+#include <flecs.h>
 #include <SDL3/SDL.h>
 #include <string>
 #include <vector>
@@ -32,6 +33,7 @@ EditorKeyConfig loadEditorKeyConfig(const std::string &path);
 bool processEditorKeys(const SDL_Event &ev, bool imguiCapturesKeyboard,
                        bool imguiCapturesMouse, bool inputCaptured,
                        Vigil::Overlay &overlay,
-                       Mundus::Scene &scene, Vista::Camera &camera);
+                       flecs::world &ecs,
+                       Vista::Camera &camera);
 
 } // namespace Vigil

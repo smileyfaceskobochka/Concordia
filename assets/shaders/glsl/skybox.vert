@@ -19,14 +19,7 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
-    vec4 baseColor;
-    float roughness;
-    float metallic;
-    uint albedoIdx;
-    uint normalIdx;
-    uint mrIdx;
-    uint aoIdx;
-    uint emissiveIdx;
+    uint debugMode;
 } pc;
 
 void main() {

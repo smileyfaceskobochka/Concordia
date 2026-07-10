@@ -1,4 +1,4 @@
-preload_meshes[3]: "@primitive(cube)", "@asset(assets://models/gltf/DamagedHelmet.glb)", "@asset(assets://models/gltf/cube.glb)"
+preload_meshes[4]: "@primitive(cube)", "@asset(assets://models/gltf/DamagedHelmet.glb)", "@asset(assets://models/gltf/cube.glb)", "@asset(assets://models/gltf/CommercialRefrigerator.glb)"
 
 default_skybox: "@asset(assets://images/skybox/cubemap/Cubemap_Sky_01-512x512.png)"
 

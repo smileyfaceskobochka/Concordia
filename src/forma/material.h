@@ -32,6 +32,14 @@ struct Material {
   glm::vec4 baseColor = {1.0f, 1.0f, 1.0f, 1.0f};
   float roughness = 0.5f;
   float metallic = 0.0f;
+
+  // Dynamic Shader & Param UBO Support
+  std::string shaderManifestPath;
+  std::vector<uint8_t> paramData;
+  VkBuffer paramBuffer = VK_NULL_HANDLE;
+  void* paramAllocation = nullptr; // VmaAllocation
+  VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+  VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
 };
 
 } // namespace Forma

@@ -21,6 +21,8 @@ struct PipelineConfig {
   bool depthWriteEnable = true;
   VkCompareOp depthCompareOp = VK_COMPARE_OP_LESS;
   VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
+  VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  bool blendEnable = false;
 };
 
 class Pipeline {

@@ -1,21 +1,21 @@
 #include "overlay.h"
-#include "auxilia/toon.hpp"
-#include "lucide_icons.h"
+#include "auxilia/ctoon.hpp"
+#include "nerd_font_icons.h"
 #include "memoria/asset_manager.h"
 #include "mundus/schema.h"
 #include "vigil/style.h"
 
-static inline const char *obj_str(toon_value *obj, const char *key) {
-  toon_value *v = toon_obj_get(obj, key);
-  return v && v->type == TOON_STRING ? v->str_val : nullptr;
+static inline const char *obj_str(ctoon_value *obj, const char *key) {
+  ctoon_value *v = ctoon_obj_get(obj, key);
+  return v && v->type == CTOON_STRING ? v->str_val : nullptr;
 }
-static inline double obj_num(toon_value *obj, const char *key, double def = 0.0) {
-  toon_value *v = toon_obj_get(obj, key);
-  return v && v->type == TOON_NUMBER ? v->num_val : def;
+static inline double obj_num(ctoon_value *obj, const char *key, double def = 0.0) {
+  ctoon_value *v = ctoon_obj_get(obj, key);
+  return v && v->type == CTOON_NUMBER ? v->num_val : def;
 }
-static inline bool obj_bool(toon_value *obj, const char *key, bool def = false) {
-  toon_value *v = toon_obj_get(obj, key);
-  return v && v->type == TOON_BOOL ? v->bool_val : def;
+static inline bool obj_bool(ctoon_value *obj, const char *key, bool def = false) {
+  ctoon_value *v = ctoon_obj_get(obj, key);
+  return v && v->type == CTOON_BOOL ? v->bool_val : def;
 }
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -42,9 +42,12 @@ static inline bool obj_bool(toon_value *obj, const char *key, bool def = false) 
 namespace Vigil {
 
 void Overlay::loadUIConfig(const std::string &path) {
-  Auxilia::toon_doc doc;
-  if (!doc.load_file(path.c_str()))
+  Auxilia::ctoon_doc doc;
+  if (!doc.load_file(path.c_str())) {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "Overlay: failed to load UI config: %s", path.c_str());
     return;
+  }
 
   std::string errors;
   if (!Mundus::Schema::validateUI(doc.get(), errors)) {
@@ -55,25 +58,28 @@ void Overlay::loadUIConfig(const std::string &path) {
   ImGuiIO &io = ImGui::GetIO();
 
   // Load fonts
-  toon_value *fonts = toon_obj_get(doc.get(), "fonts");
-  if (fonts && fonts->type == TOON_ARRAY) {
+  ctoon_value *fonts = ctoon_obj_get(doc.get(), "fonts");
+  SDL_Log("Overlay: fonts=%s", fonts ? (fonts->type == CTOON_ARRAY ? "array" : "non-array") : "null");
+  if (fonts && fonts->type == CTOON_ARRAY) {
+    SDL_Log("Overlay: font count=%zu", fonts->len);
     for (size_t i = 0; i < fonts->len; ++i) {
-      toon_value *entry = &fonts->arr[i];
+      ctoon_value *entry = &fonts->arr[i];
       const char *fp = obj_str(entry, "path");
       float sz = (float)obj_num(entry, "size", 16.0f);
       float offY = (float)obj_num(entry, "glyph_offset_y", 0.0f);
-      bool merge = obj_bool(entry, "merge_mode", false);
+
+      if (!fp) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Overlay: font[%zu] has no path, skipping", i);
+        continue;
+      }
 
       ImFontConfig cfg;
-      cfg.MergeMode = merge;
       cfg.GlyphOffset.y = offY;
-      if (merge) {
-        cfg.GlyphMinAdvanceX = sz;
-        static const ImWchar lucideRanges[] = {ICON_LC_MIN, ICON_LC_MAX, 0};
-        io.Fonts->AddFontFromFileTTF(fp, sz, &cfg, lucideRanges);
-      } else {
-        io.Fonts->AddFontFromFileTTF(fp, sz, &cfg);
-      }
+      static const ImWchar nfRanges[] = {0x0020, 0x00FF, ICON_NF_MIN, ICON_NF_MAX, 0};
+      ImFont *loaded = io.Fonts->AddFontFromFileTTF(fp, sz, &cfg, nfRanges);
+      SDL_Log("Overlay: font[%zu] path=%s size=%.1f offY=%.1f -> %s",
+              i, fp, sz, offY, loaded ? "loaded" : "FAILED");
     }
   }
 
@@ -97,10 +103,10 @@ void Overlay::loadUIConfig(const std::string &path) {
 
   // Debug modes
   m_debugModes.clear();
-  toon_value *modes = toon_obj_get(doc.get(), "debug_modes");
-  if (modes && modes->type == TOON_ARRAY) {
+  ctoon_value *modes = ctoon_obj_get(doc.get(), "debug_modes");
+  if (modes && modes->type == CTOON_ARRAY) {
     for (size_t i = 0; i < modes->len; ++i)
-      if (modes->arr[i].type == TOON_STRING && modes->arr[i].str_val)
+      if (modes->arr[i].type == CTOON_STRING && modes->arr[i].str_val)
         m_debugModes.push_back(modes->arr[i].str_val);
   }
   if (m_debugModes.empty())
@@ -127,7 +133,7 @@ Overlay::Overlay(const Petra::Window &window,
   m_device = renderCtx.getDevice();
 
   // Load UI config first to get descriptor pool sizes
-  Auxilia::toon_doc uiDoc;
+  Auxilia::ctoon_doc uiDoc;
   std::string uiPath =
       std::string(CONCORDIA_ASSETS_DIR) + "/config/ui.toon";
   float poolSets = 11000.0f;
@@ -245,10 +251,8 @@ void Overlay::drawDirTree(const std::vector<FileEntry> &entries) {
       flags |= ImGuiTreeNodeFlags_Selected;
 
     ImGuiID nodeId = ImGui::GetID(entry.name.c_str());
-    ImGui::PushOverrideID(nodeId);
-    bool nodeOpen = ImGui::GetStateStorage()->GetInt(ImGui::GetID("##Open"), 0) != 0;
-    ImGui::PopID();
-    const char *dirIcon = nodeOpen ? ICON_LC_FOLDER_OPEN : ICON_LC_FOLDER;
+    bool wasOpen = ImGui::GetStateStorage()->GetBool(nodeId, false);
+    const char *dirIcon = wasOpen ? ICON_NF_FOLDER_OPEN : ICON_NF_FOLDER;
     bool open = ImGui::TreeNodeEx(entry.name.c_str(), flags,
                                    "%s  %s", dirIcon, entry.name.c_str());
     if (ImGui::IsItemClicked()) {
@@ -269,16 +273,19 @@ void Overlay::drawDirTree(const std::vector<FileEntry> &entries) {
 }
 
 void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
-                         Mundus::Scene &scene,
+                     flecs::world &ecs,
                          Memoria::AssetManager &assetManager,
                          VkSampler sampler, uint32_t *debugMode,
                          uint32_t *selectedSkybox, uint32_t skyboxCount,
                          const char *const *skyboxNames,
                          uint32_t shaderCount,
                          const char *const *shaderNames) {
-  const float PAD = m_statsPadding;
+  static int dbgFrame = 0;
+  dbgFrame++;
+  SDL_Log("DBG OV [%d] drawUI begin", dbgFrame);
   const ImGuiViewport *viewport = ImGui::GetMainViewport();
   ImVec2 work_pos = viewport->WorkPos;
+  constexpr float PAD = 10.0f;
 
   // ── STATS WINDOW (collapsible categories) ──────────────────────────────
   ImGui::SetNextWindowPos(ImVec2(work_pos.x + PAD, work_pos.y + PAD),
@@ -292,10 +299,10 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
 
   if (ImGui::Begin("Concordia Engine Stats", nullptr, window_flags)) {
     ImGui::TextColored(ImVec4(0.0f, 0.8f, 1.0f, 1.0f),
-                       ICON_LC_CUBOID "  CONCORDIA ENGINE");
+                       ICON_NF_CUBOID "  CONCORDIA ENGINE");
     ImGui::Separator();
 
-    if (ImGui::CollapsingHeader(ICON_LC_ACTIVITY "  Performance")) {
+    if (ImGui::CollapsingHeader(ICON_NF_ACTIVITY "  Performance")) {
       ImGui::Text("  FPS:");
       ImGui::SameLine(120);
       ImGui::TextColored(ImVec4(0.8f, 1.0f, 0.4f, 1.0f), "%.1f", stats.fps);
@@ -314,7 +321,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       ImGui::Text("%u", stats.vertexCount);
     }
 
-    if (ImGui::CollapsingHeader(ICON_LC_CAMERA "  Camera")) {
+    if (ImGui::CollapsingHeader(ICON_NF_CAMERA "  Camera")) {
       ImGui::Text("  Position:");
       ImGui::SameLine(120);
       ImGui::Text("(%.1f, %.1f, %.1f)", stats.cameraPos.x, stats.cameraPos.y,
@@ -325,13 +332,13 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
                   stats.cameraFront.y, stats.cameraFront.z);
     }
 
-    if (ImGui::CollapsingHeader(ICON_LC_MONITOR "  Graphics")) {
+    if (ImGui::CollapsingHeader(ICON_NF_MONITOR "  Graphics")) {
       ImGui::Text("  GPU:");
       ImGui::SameLine(120);
       ImGui::Text("%s", renderCtx.getGPUName().c_str());
     }
 
-    if (ImGui::CollapsingHeader(ICON_LC_SETTINGS "  Controls")) {
+    if (ImGui::CollapsingHeader(ICON_NF_SETTINGS "  Controls")) {
       if (stats.cameraSpeed)
         ImGui::SliderFloat("Move Speed", stats.cameraSpeed, m_sliderSpeedMin,
                            m_sliderSpeedMax);
@@ -342,11 +349,13 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       if (stats.captureMouse && !(*stats.captureMouse)) {
         if (ImGui::Button("Enter Viewing Mode (Press ESC to exit)",
                           ImVec2(-1.0f, 0.0f))) {
+          SDL_Log("DBG OV [%d] user clicked Enter Viewing Mode", dbgFrame);
           *stats.captureMouse = true;
         }
       } else if (stats.captureMouse) {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                            "Viewing Mode Active (ESC to exit)");
+        SDL_Log("DBG OV [%d] viewing mode is active", dbgFrame);
       }
     }
   }
@@ -362,10 +371,12 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
 
   if (ImGui::Begin("Scene Inspector", nullptr,
                    ImGuiWindowFlags_AlwaysAutoResize)) {
-    if (ImGui::CollapsingHeader(ICON_LC_SUN "  Global Lighting",
+    if (ImGui::CollapsingHeader(ICON_NF_SUN "  Global Lighting",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-      ImGui::DragFloat3("Direction", &scene.globalLightDir.x, 0.05f);
-      ImGui::ColorEdit3("Color", &scene.globalLightColor.x);
+      auto &lightDir = ecs.get_mut<Mundus::LightDir>();
+      auto &lightColor = ecs.get_mut<Mundus::LightColor>();
+      ImGui::DragFloat3("Direction", &lightDir.value.x, 0.05f);
+      ImGui::ColorEdit3("Color", &lightColor.value.x);
       ImGui::Spacing();
       ImGui::Separator();
       const char *preview = (*selectedSkybox < skyboxCount && skyboxNames)
@@ -387,64 +398,64 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
     }
 
     ImGui::Separator();
-    if (ImGui::CollapsingHeader(ICON_LC_LIST_TREE "  Scene Hierarchy",
+    if (ImGui::CollapsingHeader(ICON_NF_LIST_TREE "  Scene Hierarchy",
                                 ImGuiTreeNodeFlags_DefaultOpen)) {
-      auto &entities = scene.getEntities();
+      std::function<void(flecs::entity)> drawNode;
+      drawNode = [&](flecs::entity e) {
+        const Mundus::Name *n = e.try_get<Mundus::Name>();
+        if (!n) return;
+        const char *entName = n->value.empty() ? "unnamed" : n->value.c_str();
 
-      std::function<void(int)> drawNode = [&](int index) {
-        auto &ent = entities[index];
-        ImGui::PushID(index);
+        ImGui::PushID(static_cast<int>(e.raw_id()));
+
+        bool hasChildren = false;
+        e.children([&](flecs::entity) { hasChildren = true; });
 
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
                                    ImGuiTreeNodeFlags_OpenOnDoubleClick |
                                    ImGuiTreeNodeFlags_SpanAvailWidth;
-        if (ent.children.empty()) {
+        if (!hasChildren)
           flags |= ImGuiTreeNodeFlags_Leaf;
-        }
-        if (m_selectedEntity == index) {
+        if (e == m_selectedEntity)
           flags |= ImGuiTreeNodeFlags_Selected;
-        }
 
-        bool nodeOpen = ImGui::TreeNodeEx("##node", flags, "%s",
-                                          ent.name.c_str());
-        if (ImGui::IsItemClicked()) {
-          m_selectedEntity = index;
-        }
+        bool nodeOpen = ImGui::TreeNodeEx("##node", flags, "%s", entName);
+        if (ImGui::IsItemClicked())
+          m_selectedEntity = e;
 
-        // ── Right-click context menu ──
         if (ImGui::BeginPopupContextItem()) {
           if (ImGui::MenuItem("Focus Camera")) {
-            stats.hasFocusTarget = true;
-            stats.focusTarget =
-                glm::vec3(ent.globalTransform[3][0], ent.globalTransform[3][1],
-                          ent.globalTransform[3][2]);
-          }
-          if (ImGui::MenuItem("Rename")) {
-            ImGui::OpenPopup("Rename Entity");
-          }
-          if (ImGui::MenuItem("Delete")) {
-            int prevSelected = m_selectedEntity;
-            bool removed = scene.removeEntity(index);
-            if (removed && prevSelected == index) {
-              m_selectedEntity = -1;
-            } else if (removed && prevSelected > index) {
-              m_selectedEntity = prevSelected - 1;
+            const Mundus::GlobalTransform *gt = e.try_get<Mundus::GlobalTransform>();
+            if (gt) {
+              stats.hasFocusTarget = true;
+              stats.focusTarget = glm::vec3(gt->value[3][0], gt->value[3][1],
+                                            gt->value[3][2]);
             }
+          }
+          if (ImGui::MenuItem("Rename"))
+            ImGui::OpenPopup("Rename Entity");
+          if (ImGui::MenuItem("Delete")) {
+            std::function<void(flecs::entity)> destroyTree;
+            destroyTree = [&](flecs::entity ent) {
+              ent.children([&](flecs::entity child) { destroyTree(child); });
+              ent.destruct();
+            };
+            destroyTree(e);
+            if (e == m_selectedEntity) m_selectedEntity = flecs::entity();
           }
           ImGui::EndPopup();
         }
 
-        // ── Rename modal ──
         if (ImGui::BeginPopupModal("Rename Entity", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
           static char renameBuf[256];
-          strncpy(renameBuf, ent.name.c_str(), m_renameBufSize - 1);
+          strncpy(renameBuf, entName, m_renameBufSize - 1);
           renameBuf[m_renameBufSize - 1] = '\0';
           ImGui::Text("New name:");
           ImGui::SameLine();
           if (ImGui::InputText("##rename", renameBuf, m_renameBufSize,
                                ImGuiInputTextFlags_EnterReturnsTrue)) {
-            ent.name = renameBuf;
+            e.set<Mundus::Name>({renameBuf});
             ImGui::CloseCurrentPopup();
           }
           if (ImGui::Button("Cancel"))
@@ -453,47 +464,60 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
         }
 
         if (nodeOpen) {
-          for (int childIdx : ent.children) {
-            drawNode(childIdx);
-          }
+          e.children([&](flecs::entity child) { drawNode(child); });
           ImGui::TreePop();
         }
-
         ImGui::PopID();
       };
 
-      for (size_t i = 0; i < entities.size(); ++i) {
-        if (entities[i].parentIndex == -1) {
-          drawNode(static_cast<int>(i));
-        }
-      }
+      // Draw root entities (no parent)
+      SDL_Log("DBG OV [%d] before root entity query", dbgFrame);
+      ecs.defer_begin();
+      ecs.query_builder<>()
+        .with<Mundus::Name>()
+        .without(flecs::ChildOf, flecs::Wildcard)
+        .build()
+        .each([&](flecs::iter &it, size_t row) {
+          SDL_Log("DBG OV [%d] drawNode: root entity %u", dbgFrame, it.entity(row).raw_id());
+          drawNode(it.entity(row));
+        });
+      ecs.defer_end();
+      SDL_Log("DBG OV [%d] after root entity query", dbgFrame);
     }
 
     // ── INSPECTOR ──────────────────────────────────────────────────────
     ImGui::Separator();
-    if (m_selectedEntity >= 0 &&
-        m_selectedEntity < static_cast<int>(scene.getEntities().size())) {
-      auto &ent = scene.getEntities()[m_selectedEntity];
-      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+    if (m_selectedEntity.is_alive()) {
+      flecs::entity e = m_selectedEntity;
+      const Mundus::Name *n = e.try_get<Mundus::Name>();
+      const Mundus::Visibility *v = e.try_get<Mundus::Visibility>();
+      const Mundus::Transform *t = e.try_get<Mundus::Transform>();
+      const Mundus::GlobalTransform *gt = e.try_get<Mundus::GlobalTransform>();
+      const Mundus::MeshAssetRef *mr = e.try_get<Mundus::MeshAssetRef>();
+      const Mundus::MaterialRef *matRef = e.try_get<Mundus::MaterialRef>();
 
-      // Push ID for per-entity collapse state
-      ImGui::PushID(m_selectedEntity);
+      if (n) {
+      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+      ImGui::PushID(static_cast<int>(e.raw_id()));
 
       // ── Entity Header ──────────────────────────────────────────────
       ImGui::BeginGroup();
       ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s",
-                         ent.name.c_str());
+                         n->value.c_str());
       ImGui::SameLine();
-      if (ImGui::SmallButton(ent.visible ? ICON_LC_EYE : ICON_LC_EYE_OFF)) {
-        scene.setEntityVisible(m_selectedEntity, !ent.visible);
+      bool vis = v ? v->visible : true;
+      if (ImGui::SmallButton(vis ? ICON_NF_EYE : ICON_NF_EYE_OFF)) {
+        SDL_Log("DBG OV [%d] toggling visibility on entity %u", dbgFrame, e.raw_id());
+        auto &mvis = e.get_mut<Mundus::Visibility>();
+        mvis.visible = !mvis.visible;
       }
-      if (ent.mesh) {
+      if (mr && mr->value) {
         ImGui::SameLine();
-        ImGui::TextDisabled("  (%u verts)", ent.mesh->vertexCount);
+        ImGui::TextDisabled("  (%u verts)", mr->value->vertexCount);
       }
-      if (ent.material) {
+      if (matRef && matRef->value) {
         ImGui::SameLine();
-        ImGui::TextDisabled("  [%s]", ent.material->shaderName.c_str());
+        ImGui::TextDisabled("  [%s]", matRef->value->shaderName.c_str());
       }
       ImGui::EndGroup();
       ImGui::Separator();
@@ -502,8 +526,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
         float w = 0;
         for (auto *l : labels) {
           float lw = ImGui::CalcTextSize(l).x;
-          if (lw > w)
-            w = lw;
+          if (lw > w) w = lw;
         }
         return w;
       };
@@ -515,7 +538,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
         ImGui::PopStyleColor();
         float widgetX =
             ImGui::GetCursorPosX() + measureLabelWidth({"Location", "Rotation",
-                                                         "Scale", "Spin"}) +
+                                                          "Scale", "Spin"}) +
             ImGui::GetStyle().ItemSpacing.x * 2;
         ImGui::SameLine(widgetX);
         widget_func();
@@ -523,31 +546,34 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       };
 
       // ── Transform ───────────────────────────────────────────────────
-      if (ImGui::CollapsingHeader(ICON_LC_MOVE "  Transform",
-                                  ImGuiTreeNodeFlags_DefaultOpen)) {
-        property_grid_row("Location", [&]() {
-          ImGui::DragFloat3("##pos", &ent.transform.position.x, 0.1f);
-        });
-        glm::vec3 rotDeg = glm::degrees(ent.transform.rotation);
-        property_grid_row("Rotation", [&]() {
-          if (ImGui::DragFloat3("##rot", &rotDeg.x, 1.0f)) {
-            ent.transform.rotation = glm::radians(rotDeg);
-          }
-        });
-        property_grid_row("Scale", [&]() {
-          ImGui::DragFloat3("##scale", &ent.transform.scale.x, 0.05f);
-        });
-        property_grid_row("Spin", [&]() {
-          glm::vec3 sDeg = glm::degrees(ent.transform.angularVelocity);
-          if (ImGui::DragFloat3("##spin", &sDeg.x, 5.0f)) {
-            ent.transform.angularVelocity = glm::radians(sDeg);
-          }
-        });
+      if (t) {
+        if (ImGui::CollapsingHeader(ICON_NF_MOVE "  Transform",
+                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+          Mundus::Transform mutT = *t;
+          property_grid_row("Location", [&]() {
+            ImGui::DragFloat3("##pos", &mutT.position.x, 0.1f);
+          });
+          glm::vec3 rotDeg = glm::degrees(mutT.rotation);
+          property_grid_row("Rotation", [&]() {
+            if (ImGui::DragFloat3("##rot", &rotDeg.x, 1.0f))
+              mutT.rotation = glm::radians(rotDeg);
+          });
+          property_grid_row("Scale", [&]() {
+            ImGui::DragFloat3("##scale", &mutT.scale.x, 0.05f);
+          });
+          property_grid_row("Spin", [&]() {
+            glm::vec3 sDeg = glm::degrees(mutT.angularVelocity);
+            if (ImGui::DragFloat3("##spin", &sDeg.x, 5.0f))
+              mutT.angularVelocity = glm::radians(sDeg);
+          });
+          e.set<Mundus::Transform>(mutT);
+        }
       }
 
       // ── Material ────────────────────────────────────────────────────
-      if (ent.material) {
-        if (ImGui::CollapsingHeader(ICON_LC_PALETTE "  Material",
+      if (matRef && matRef->value) {
+        auto mat = matRef->value;
+        if (ImGui::CollapsingHeader(ICON_NF_PALETTE "  Material",
                                     ImGuiTreeNodeFlags_DefaultOpen)) {
           float matLabelWidth =
               measureLabelWidth({"Shader", "Debug", "Base Color", "Roughness",
@@ -567,16 +593,13 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
 
           mat_grid_row("Shader", [&]() {
             if (ImGui::BeginCombo("##shader",
-                                  ent.material->shaderName.c_str())) {
-              for (uint32_t n = 0; n < shaderCount; n++) {
-                if (!shaderNames[n])
-                  continue;
-                bool sel = (ent.material->shaderName == shaderNames[n]);
-                if (ImGui::Selectable(shaderNames[n], sel)) {
-                  ent.material->shaderName = shaderNames[n];
-                }
-                if (sel)
-                  ImGui::SetItemDefaultFocus();
+                                  mat->shaderName.c_str())) {
+              for (uint32_t sn = 0; sn < shaderCount; sn++) {
+                if (!shaderNames[sn]) continue;
+                bool sel = (mat->shaderName == shaderNames[sn]);
+                if (ImGui::Selectable(shaderNames[sn], sel))
+                  mat->shaderName = shaderNames[sn];
+                if (sel) ImGui::SetItemDefaultFocus();
               }
               ImGui::EndCombo();
             }
@@ -587,19 +610,16 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
                                       ? m_debugModes[*debugMode].c_str()
                                       : "None";
             if (ImGui::BeginCombo("##debug", preview)) {
-              for (size_t n = 0; n < m_debugModes.size(); ++n) {
-                if (ImGui::Selectable(m_debugModes[n].c_str(),
-                                      *debugMode == n)) {
-                  *debugMode = static_cast<uint32_t>(n);
-                }
+              for (size_t dn = 0; dn < m_debugModes.size(); ++dn) {
+                if (ImGui::Selectable(m_debugModes[dn].c_str(),
+                                      *debugMode == dn))
+                  *debugMode = static_cast<uint32_t>(dn);
               }
               ImGui::EndCombo();
             }
           });
 
           ImGui::Separator();
-
-          // Base Color with live swatch
           ImGui::BeginGroup();
           ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
           float textY = ImGui::GetCursorPosY();
@@ -607,9 +627,8 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
           ImVec2 swatchPos(ImGui::GetCursorScreenPos().x,
                            ImGui::GetCursorScreenPos().y +
                                (ImGui::GetTextLineHeight() - 10) * 0.5f);
-          ImU32 swatchCol =
-              ImColor(ent.material->baseColor.x, ent.material->baseColor.y,
-                      ent.material->baseColor.z, 1.0f);
+          ImU32 swatchCol = ImColor(mat->baseColor.x, mat->baseColor.y,
+                                    mat->baseColor.z, mat->baseColor.w);
           dl->AddRectFilled(swatchPos,
                             ImVec2(swatchPos.x + 10, swatchPos.y + 10),
                             swatchCol);
@@ -620,15 +639,14 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
           ImGui::PopStyleColor();
           ImGui::SameLine(ImGui::GetCursorPosX() + matLabelWidth +
                           ImGui::GetStyle().ItemSpacing.x * 2);
-          ImGui::ColorEdit3("##color", &ent.material->baseColor.x);
+          ImGui::ColorEdit4("##color", &mat->baseColor.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreview);
           ImGui::EndGroup();
 
           mat_grid_row("Roughness", [&]() {
-            ImGui::SliderFloat("##rough", &ent.material->roughness, 0.0f,
-                               1.0f);
+            ImGui::SliderFloat("##rough", &mat->roughness, 0.0f, 1.0f);
           });
           mat_grid_row("Metallic", [&]() {
-            ImGui::SliderFloat("##metal", &ent.material->metallic, 0.0f, 1.0f);
+            ImGui::SliderFloat("##metal", &mat->metallic, 0.0f, 1.0f);
           });
 
           ImGui::Separator();
@@ -638,20 +656,16 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
             uint32_t Forma::Material::*idxField;
           };
           TexSlot slots[] = {
-              {"Albedo", &Forma::Material::albedo,
-               &Forma::Material::albedoIdx},
-              {"Normal", &Forma::Material::normal,
-               &Forma::Material::normalIdx},
-              {"Met-Rou", &Forma::Material::metallicRoughness,
-               &Forma::Material::metallicRoughnessIdx},
-              {"AO", &Forma::Material::ao, &Forma::Material::aoIdx},
-              {"Emiss", &Forma::Material::emissive,
-               &Forma::Material::emissiveIdx},
+            {"Albedo", &Forma::Material::albedo, &Forma::Material::albedoIdx},
+            {"Normal", &Forma::Material::normal, &Forma::Material::normalIdx},
+            {"Met-Rou", &Forma::Material::metallicRoughness, &Forma::Material::metallicRoughnessIdx},
+            {"AO", &Forma::Material::ao, &Forma::Material::aoIdx},
+            {"Emiss", &Forma::Material::emissive, &Forma::Material::emissiveIdx},
           };
           auto &loadedTex = assetManager.getLoadedTextures();
           for (auto &slot : slots) {
-            auto &tex = ent.material.get()->*slot.field;
-            auto &idx = ent.material.get()->*slot.idxField;
+            auto &tex = mat.get()->*slot.field;
+            auto &idx = mat.get()->*slot.idxField;
             char preview[64];
             if (tex)
               snprintf(preview, sizeof(preview), "Tex#%u (%dx%d)",
@@ -666,8 +680,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
                   idx = 0;
                 }
                 for (size_t ti = 0; ti < loadedTex.size(); ++ti) {
-                  if (!loadedTex[ti])
-                    continue;
+                  if (!loadedTex[ti]) continue;
                   bool sel = (tex == loadedTex[ti]);
                   char item[64];
                   snprintf(item, sizeof(item), "Tex#%u (%dx%d)",
@@ -677,8 +690,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
                     tex = loadedTex[ti];
                     idx = loadedTex[ti]->textureId;
                   }
-                  if (sel)
-                    ImGui::SetItemDefaultFocus();
+                  if (sel) ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
               }
@@ -688,17 +700,19 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
       }
 
       // ── World transform ──────────────────────────────────────────
-      ImGui::Separator();
-      float worldLabelW = ImGui::CalcTextSize("World Position").x;
-      ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "World Position");
-      ImGui::SameLine(ImGui::GetCursorPosX() + worldLabelW +
-                      ImGui::GetStyle().ItemSpacing.x * 2);
-      ImGui::TextDisabled("(%.2f, %.2f, %.2f)", ent.globalTransform[3][0],
-                          ent.globalTransform[3][1],
-                          ent.globalTransform[3][2]);
+      if (gt) {
+        ImGui::Separator();
+        float worldLabelW = ImGui::CalcTextSize("World Position").x;
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "World Position");
+        ImGui::SameLine(ImGui::GetCursorPosX() + worldLabelW +
+                        ImGui::GetStyle().ItemSpacing.x * 2);
+        ImGui::TextDisabled("(%.2f, %.2f, %.2f)", gt->value[3][0],
+                            gt->value[3][1], gt->value[3][2]);
+      }
 
       ImGui::PopID();
       ImGui::PopStyleVar();
+      } // if (n)
     } else {
       ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
                          "No entity selected.");
@@ -765,10 +779,17 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
         bool isImage = (fi.ext == ".png" || fi.ext == ".jpg" ||
                         fi.ext == ".jpeg" || fi.ext == ".hdr");
         bool isModel = (fi.ext == ".glb" || fi.ext == ".gltf");
+        bool isFont = (fi.ext == ".ttf" || fi.ext == ".otf" ||
+                       fi.ext == ".woff" || fi.ext == ".woff2");
+        bool isAudio = (fi.ext == ".wav" || fi.ext == ".mp3" ||
+                        fi.ext == ".ogg" || fi.ext == ".flac");
+        bool isToon = (fi.ext == ".toon");
+        bool isData = (fi.ext == ".json" || fi.ext == ".xml" ||
+                       fi.ext == ".yaml" || fi.ext == ".toml");
 
         if (fi.isDir) {
           if (ImGui::Selectable(
-                  (ICON_LC_FOLDER "  " + fi.name).c_str(), false,
+                  (ICON_NF_FOLDER "  " + fi.name).c_str(), false,
                   ImGuiSelectableFlags_AllowDoubleClick)) {
             m_selectedDir = fi.path;
             m_selectedFileIndex = -1;
@@ -776,7 +797,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
           }
         } else if (isImage) {
           if (ImGui::Selectable(
-                  (ICON_LC_IMAGE "  " + fi.name).c_str(),
+                  (ICON_NF_IMAGE "  " + fi.name).c_str(),
                   m_selectedFileIndex == static_cast<int>(i))) {
             m_selectedFileIndex = static_cast<int>(i);
             m_previewPath = fi.path;
@@ -797,21 +818,49 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
           }
         } else if (isModel) {
           if (ImGui::Selectable(
-                  (ICON_LC_BOX "  " + fi.name).c_str(),
+                  (ICON_NF_BOX "  " + fi.name).c_str(),
                   m_selectedFileIndex == static_cast<int>(i))) {
             m_selectedFileIndex = static_cast<int>(i);
             m_previewPath = fi.path;
             try {
-              assetManager.loadGLTF(fi.path, scene);
+              assetManager.loadGLTF(fi.path, ecs);
               SDL_Log("Overlay: Loaded model %s", fi.path.c_str());
             } catch (std::exception &e) {
               SDL_Log("Overlay: Failed to load model %s: %s", fi.path.c_str(),
                       e.what());
             }
           }
+        } else if (isFont) {
+          if (ImGui::Selectable(
+                  (ICON_NF_FONT "  " + fi.name).c_str(),
+                  m_selectedFileIndex == static_cast<int>(i))) {
+            m_selectedFileIndex = static_cast<int>(i);
+            m_previewPath = fi.path;
+          }
+        } else if (isAudio) {
+          if (ImGui::Selectable(
+                  (ICON_NF_MUSIC "  " + fi.name).c_str(),
+                  m_selectedFileIndex == static_cast<int>(i))) {
+            m_selectedFileIndex = static_cast<int>(i);
+            m_previewPath = fi.path;
+          }
+        } else if (isToon) {
+          if (ImGui::Selectable(
+                  (ICON_NF_CONFIG "  " + fi.name).c_str(),
+                  m_selectedFileIndex == static_cast<int>(i))) {
+            m_selectedFileIndex = static_cast<int>(i);
+            m_previewPath = fi.path;
+          }
+        } else if (isData) {
+          if (ImGui::Selectable(
+                  (ICON_NF_CODE "  " + fi.name).c_str(),
+                  m_selectedFileIndex == static_cast<int>(i))) {
+            m_selectedFileIndex = static_cast<int>(i);
+            m_previewPath = fi.path;
+          }
         } else {
           if (ImGui::Selectable(
-                  (ICON_LC_FILE "  " + fi.name).c_str(),
+                  (ICON_NF_FILE "  " + fi.name).c_str(),
                   m_selectedFileIndex == static_cast<int>(i))) {
             m_selectedFileIndex = static_cast<int>(i);
             m_previewPath = fi.path;
@@ -854,6 +903,7 @@ void Overlay::drawUI(const Render::Context &renderCtx, DebugStats &stats,
     }
   }
   ImGui::End();
+  SDL_Log("DBG OV [%d] drawUI end", dbgFrame);
 }
 
 void Overlay::endFrameAndRecord(VkCommandBuffer cmdBuf) {

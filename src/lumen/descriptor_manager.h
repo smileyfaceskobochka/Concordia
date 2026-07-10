@@ -34,6 +34,7 @@ public:
 
   const VkDescriptorSetLayout &getGlobalLayout() const { return m_globalLayout; }
   const VkDescriptorSetLayout &getMaterialLayout() const { return m_materialLayout; }
+  const VkDescriptorSetLayout &getMaterialParamLayout() const { return m_materialParamLayout; }
   const VkDescriptorSet &getGlobalSet() const { return m_globalSet; }
   const VkDescriptorSet &getBindlessSet() const { return m_bindlessSet; }
   void *getUBOMapped() const { return m_uboMapped; }
@@ -45,6 +46,7 @@ private:
 
   VkDescriptorSetLayout m_globalLayout = VK_NULL_HANDLE;
   VkDescriptorSetLayout m_materialLayout = VK_NULL_HANDLE;
+  VkDescriptorSetLayout m_materialParamLayout = VK_NULL_HANDLE;
   VkDescriptorPool m_pool = VK_NULL_HANDLE;
   VkDescriptorSet m_globalSet = VK_NULL_HANDLE;
   VkDescriptorSet m_bindlessSet = VK_NULL_HANDLE;

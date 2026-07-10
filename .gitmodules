@@ -25,3 +25,6 @@
 [submodule "third_party/ctoon"]
 	path = third_party/ctoon
 	url = https://github.com/smileyfaceskobochka/ctoon
+[submodule "third_party/flecs"]
+	path = third_party/flecs
+	url = https://github.com/SanderMertens/flecs.git

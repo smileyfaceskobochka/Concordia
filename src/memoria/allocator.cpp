@@ -348,17 +348,28 @@ void Allocator::generateMipmaps(VkImage image, VkFormat format,
 }
 
 void MeshAsset::destroy(Allocator &allocator) {
-  if (vertexBuffer)
+  if (vertexBuffer) {
     allocator.destroyBuffer(vertexBuffer, vertexAllocation);
-  if (indexBuffer)
+    vertexBuffer = VK_NULL_HANDLE;
+    vertexAllocation = VK_NULL_HANDLE;
+  }
+  if (indexBuffer) {
     allocator.destroyBuffer(indexBuffer, indexAllocation);
+    indexBuffer = VK_NULL_HANDLE;
+    indexAllocation = VK_NULL_HANDLE;
+  }
 }
 
 void TextureAsset::destroy(Allocator &allocator, VkDevice device) {
-  if (view)
+  if (view) {
     vkDestroyImageView(device, view, nullptr);
-  if (image)
+    view = VK_NULL_HANDLE;
+  }
+  if (image) {
     allocator.destroyImage(image, allocation);
+    image = VK_NULL_HANDLE;
+    allocation = VK_NULL_HANDLE;
+  }
 }
 
 } // namespace Memoria

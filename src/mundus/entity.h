@@ -2,6 +2,7 @@
 
 #include "forma/material.h"
 #include "memoria/asset_manager.h"
+#include "mundus/components.h"
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -10,15 +11,6 @@
 #include <vulkan/vulkan.h>
 
 namespace Mundus {
-
-struct Transform {
-  glm::vec3 position{0.0f};
-  glm::vec3 rotation{0.0f};
-  glm::vec3 scale{1.0f};
-  glm::vec3 angularVelocity{0.0f};
-
-  glm::mat4 getLocalMatrix() const;
-};
 
 struct Entity {
   std::string name;

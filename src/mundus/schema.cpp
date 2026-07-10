@@ -1,5 +1,5 @@
 #include "schema.h"
-#include "auxilia/toon.hpp"
+#include "auxilia/ctoon.hpp"
 #include <SDL3/SDL.h>
 #include <cstring>
 #include <string>
@@ -9,8 +9,8 @@ namespace Schema {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-static bool matchTag(toon_value *v, const char *prefix, size_t prefixLen) {
-  return v && v->type == TOON_STRING && v->str_val &&
+static bool matchTag(ctoon_value *v, const char *prefix, size_t prefixLen) {
+  return v && v->type == CTOON_STRING && v->str_val &&
          strncmp(v->str_val, prefix, prefixLen) == 0;
 }
 
@@ -33,15 +33,15 @@ static const char *typeName(Type t) {
   return "unknown";
 }
 
-static bool checkType(toon_value *v, Type type) {
+static bool checkType(ctoon_value *v, Type type) {
   if (!v)
     return false;
   switch (type) {
-  case String:    return v->type == TOON_STRING;
-  case Number:    return v->type == TOON_NUMBER;
-  case Bool:      return v->type == TOON_BOOL;
-  case Object:    return v->type == TOON_OBJECT;
-  case Array:     return v->type == TOON_ARRAY;
+  case String:    return v->type == CTOON_STRING;
+  case Number:    return v->type == CTOON_NUMBER;
+  case Bool:      return v->type == CTOON_BOOL;
+  case Object:    return v->type == CTOON_OBJECT;
+  case Array:     return v->type == CTOON_ARRAY;
   case Vec2:      return matchTag(v, "@vec2(", 6);
   case Vec3:      return matchTag(v, "@vec3(", 6);
   case Vec4:      return matchTag(v, "@vec4(", 6);
@@ -57,14 +57,14 @@ static bool checkType(toon_value *v, Type type) {
 // ── field validation ───────────────────────────────────────────────────────
 
 static bool validateFields(const Field *fields, size_t fieldCount,
-                           toon_value *obj, const char *context,
+                           ctoon_value *obj, const char *context,
                            std::string &errors) {
-  if (!obj || obj->type != TOON_OBJECT)
+  if (!obj || obj->type != CTOON_OBJECT)
     return false;
   bool ok = true;
   for (size_t i = 0; i < fieldCount; ++i) {
     const Field &f = fields[i];
-    toon_value *val = toon_obj_get(obj, f.name);
+    ctoon_value *val = ctoon_obj_get(obj, f.name);
     std::string path = std::string(context) + "." + f.name;
 
     if (!val) {
@@ -102,6 +102,12 @@ static const Field materialFields[] = {
   {"metallic_roughness", String, false},
   {"ao",                 String, false},
   {"emissive",           String, false},
+  {"vertex_shader",      String, false},
+  {"fragment_shader",    String, false},
+  {"cull_mode",          String, false},
+  {"depth_test",         Bool,   false},
+  {"depth_write",        Bool,   false},
+  {"blend_enable",       Bool,   false},
 };
 
 static const Field entityFields[] = {
@@ -111,6 +117,8 @@ static const Field entityFields[] = {
   {"parent",    Entity,  false},
   {"transform", Object,  false},
   {"material",  Object,  false},
+  {"model",     Asset,   false},
+  {"overrides", Object,  false},
 };
 
 static const Field sceneFields[] = {
@@ -275,23 +283,23 @@ static const Field renderPipelinesFields[] = {
 
 // ── public API ─────────────────────────────────────────────────────────────
 
-bool validateEntity(toon_value *obj, const char *context, std::string &errors);
+bool validateEntity(ctoon_value *obj, const char *context, std::string &errors);
 bool validateFields(const Field *fields, size_t fieldCount,
-                    toon_value *obj, const char *context, std::string &errors);
+                    ctoon_value *obj, const char *context, std::string &errors);
 
-bool validateEntity(toon_value *obj, const char *context, std::string &errors) {
-  if (!validateFields(entityFields, 6, obj, context, errors))
+bool validateEntity(ctoon_value *obj, const char *context, std::string &errors) {
+  if (!validateFields(entityFields, 8, obj, context, errors))
     return false;
   bool ok = true;
-  toon_value *tf = toon_obj_get(obj, "transform");
+  ctoon_value *tf = ctoon_obj_get(obj, "transform");
   if (tf)
     ok &= validateFields(transformFields, 4, tf,
                          (std::string(context) + ".transform").c_str(), errors);
-  toon_value *mat = toon_obj_get(obj, "material");
+  ctoon_value *mat = ctoon_obj_get(obj, "material");
   if (mat)
     ok &= validateFields(materialFields, 9, mat,
                          (std::string(context) + ".material").c_str(), errors);
-  toon_value *mesh = toon_obj_get(obj, "mesh");
+  ctoon_value *mesh = ctoon_obj_get(obj, "mesh");
   if (mesh) {
     if (!checkType(mesh, Primitive) && !checkType(mesh, Asset)) {
       errors += std::string("  ") + context +
@@ -302,12 +310,12 @@ bool validateEntity(toon_value *obj, const char *context, std::string &errors) {
   return ok;
 }
 
-bool validateScene(toon_value *sceneVal, std::string &errors) {
-  if (!sceneVal || sceneVal->type != TOON_OBJECT)
+bool validateScene(ctoon_value *sceneVal, std::string &errors) {
+  if (!sceneVal || sceneVal->type != CTOON_OBJECT)
     return false;
   bool ok = validateFields(sceneFields, 3, sceneVal, "scene", errors);
-  toon_value *arr = toon_obj_get(sceneVal, "entities");
-  if (arr && arr->type == TOON_ARRAY) {
+  ctoon_value *arr = ctoon_obj_get(sceneVal, "entities");
+  if (arr && arr->type == CTOON_ARRAY) {
     char ctx[64];
     for (size_t i = 0; i < arr->len; ++i) {
       snprintf(ctx, sizeof(ctx), "scene.entities[%zu]", i);
@@ -317,35 +325,35 @@ bool validateScene(toon_value *sceneVal, std::string &errors) {
   return ok;
 }
 
-bool validateConfig(toon_value *cfgRoot, std::string &errors) {
-  if (!cfgRoot || cfgRoot->type != TOON_OBJECT)
+bool validateConfig(ctoon_value *cfgRoot, std::string &errors) {
+  if (!cfgRoot || cfgRoot->type != CTOON_OBJECT)
     return false;
   bool ok = validateFields(configFields, 6, cfgRoot, "config", errors);
-  toon_value *w = toon_obj_get(cfgRoot, "window");
+  ctoon_value *w = ctoon_obj_get(cfgRoot, "window");
   if (w) ok &= validateFields(windowFields, 6, w, "config.window", errors);
-  toon_value *r = toon_obj_get(cfgRoot, "renderer");
+  ctoon_value *r = ctoon_obj_get(cfgRoot, "renderer");
   if (r) ok &= validateFields(rendererFields, 9, r, "config.renderer", errors);
-  toon_value *c = toon_obj_get(cfgRoot, "camera");
+  ctoon_value *c = ctoon_obj_get(cfgRoot, "camera");
   if (c) ok &= validateFields(cameraFields, 9, c, "config.camera", errors);
-  toon_value *sc = toon_obj_get(cfgRoot, "scene");
+  ctoon_value *sc = ctoon_obj_get(cfgRoot, "scene");
   if (sc) ok &= validateFields(sceneCfgFields, 2, sc, "config.scene", errors);
-  toon_value *li = toon_obj_get(cfgRoot, "lighting");
+  ctoon_value *li = ctoon_obj_get(cfgRoot, "lighting");
   if (li) ok &= validateFields(lightingFields, 2, li, "config.lighting", errors);
-  toon_value *sk = toon_obj_get(cfgRoot, "skybox");
+  ctoon_value *sk = ctoon_obj_get(cfgRoot, "skybox");
   if (sk) ok &= validateFields(skyboxCfgFields, 1, sk, "config.skybox", errors);
   return ok;
 }
 
-bool validateManifest(toon_value *manifestVal, std::string &errors) {
-  if (!manifestVal || manifestVal->type != TOON_OBJECT)
+bool validateManifest(ctoon_value *manifestVal, std::string &errors) {
+  if (!manifestVal || manifestVal->type != CTOON_OBJECT)
     return false;
   bool ok = validateFields(manifestFields, 4, manifestVal, "manifest", errors);
 
   // Validate each preload_mesh entry
-  toon_value *arr = toon_obj_get(manifestVal, "preload_meshes");
-  if (arr && arr->type == TOON_ARRAY) {
+  ctoon_value *arr = ctoon_obj_get(manifestVal, "preload_meshes");
+  if (arr && arr->type == CTOON_ARRAY) {
     for (size_t i = 0; i < arr->len; ++i) {
-      toon_value *e = &arr->arr[i];
+      ctoon_value *e = &arr->arr[i];
       if (!checkType(e, Primitive) && !checkType(e, Asset)) {
         char buf[64];
         snprintf(buf, sizeof(buf), "manifest.preload_meshes[%zu]", i);
@@ -357,12 +365,12 @@ bool validateManifest(toon_value *manifestVal, std::string &errors) {
   }
 
   // Validate skybox sub-section
-  toon_value *sky = toon_obj_get(manifestVal, "skybox");
-  if (sky && sky->type == TOON_OBJECT) {
+  ctoon_value *sky = ctoon_obj_get(manifestVal, "skybox");
+  if (sky && sky->type == CTOON_OBJECT) {
     ok &= validateFields(manifestSkyboxFields, 3, sky,
                          "manifest.skybox", errors);
-    toon_value *dirs = toon_obj_get(sky, "scan_directories");
-    if (dirs && dirs->type == TOON_ARRAY) {
+    ctoon_value *dirs = ctoon_obj_get(sky, "scan_directories");
+    if (dirs && dirs->type == CTOON_ARRAY) {
       for (size_t i = 0; i < dirs->len; ++i) {
         char ctx[64];
         snprintf(ctx, sizeof(ctx), "manifest.skybox.scan_directories[%zu]", i);
@@ -372,7 +380,7 @@ bool validateManifest(toon_value *manifestVal, std::string &errors) {
   }
 
   // Validate default_material
-  toon_value *dm = toon_obj_get(manifestVal, "default_material");
+  ctoon_value *dm = ctoon_obj_get(manifestVal, "default_material");
   if (dm) {
     ok &= validateFields(manifestDefaultMatFields, 4, dm,
                          "manifest.default_material", errors);
@@ -381,14 +389,14 @@ bool validateManifest(toon_value *manifestVal, std::string &errors) {
   return ok;
 }
 
-bool validateUI(toon_value *uiVal, std::string &errors) {
-  if (!uiVal || uiVal->type != TOON_OBJECT)
+bool validateUI(ctoon_value *uiVal, std::string &errors) {
+  if (!uiVal || uiVal->type != CTOON_OBJECT)
     return false;
   bool ok = validateFields(uiFields, 19, uiVal, "ui", errors);
 
   // Validate fonts array
-  toon_value *fonts = toon_obj_get(uiVal, "fonts");
-  if (fonts && fonts->type == TOON_ARRAY) {
+  ctoon_value *fonts = ctoon_obj_get(uiVal, "fonts");
+  if (fonts && fonts->type == CTOON_ARRAY) {
     for (size_t i = 0; i < fonts->len; ++i) {
       char ctx[64];
       snprintf(ctx, sizeof(ctx), "ui.fonts[%zu]", i);
@@ -397,10 +405,10 @@ bool validateUI(toon_value *uiVal, std::string &errors) {
   }
 
   // Validate debug_modes array entries are strings
-  toon_value *modes = toon_obj_get(uiVal, "debug_modes");
-  if (modes && modes->type == TOON_ARRAY) {
+  ctoon_value *modes = ctoon_obj_get(uiVal, "debug_modes");
+  if (modes && modes->type == CTOON_ARRAY) {
     for (size_t i = 0; i < modes->len; ++i) {
-      if (modes->arr[i].type != TOON_STRING) {
+      if (modes->arr[i].type != CTOON_STRING) {
         char buf[64];
         snprintf(buf, sizeof(buf), "ui.debug_modes[%zu]", i);
         errors += std::string("  ") + buf + ": expected string\n";
@@ -412,14 +420,14 @@ bool validateUI(toon_value *uiVal, std::string &errors) {
   return ok;
 }
 
-bool validateEditorKeys(toon_value *keysVal, std::string &errors) {
-  if (!keysVal || keysVal->type != TOON_OBJECT)
+bool validateEditorKeys(ctoon_value *keysVal, std::string &errors) {
+  if (!keysVal || keysVal->type != CTOON_OBJECT)
     return false;
   bool ok = validateFields(editorKeysFields, 8, keysVal, "editor_keys", errors);
 
   // Validate each binding
-  toon_value *bindings = toon_obj_get(keysVal, "bindings");
-  if (bindings && bindings->type == TOON_ARRAY) {
+  ctoon_value *bindings = ctoon_obj_get(keysVal, "bindings");
+  if (bindings && bindings->type == CTOON_ARRAY) {
     for (size_t i = 0; i < bindings->len; ++i) {
       char ctx[64];
       snprintf(ctx, sizeof(ctx), "editor_keys.bindings[%zu]", i);
@@ -430,19 +438,67 @@ bool validateEditorKeys(toon_value *keysVal, std::string &errors) {
   return ok;
 }
 
-bool validateRenderPipelines(toon_value *pipelinesVal, std::string &errors) {
-  if (!pipelinesVal || pipelinesVal->type != TOON_OBJECT)
+bool validateRenderPipelines(ctoon_value *pipelinesVal, std::string &errors) {
+  if (!pipelinesVal || pipelinesVal->type != CTOON_OBJECT)
     return false;
   bool ok = validateFields(renderPipelinesFields, 1, pipelinesVal,
                            "render_pipelines", errors);
 
-  toon_value *pips = toon_obj_get(pipelinesVal, "pipelines");
-  if (pips && pips->type == TOON_ARRAY) {
+  ctoon_value *pips = ctoon_obj_get(pipelinesVal, "pipelines");
+  if (pips && pips->type == CTOON_ARRAY) {
     for (size_t i = 0; i < pips->len; ++i) {
       char ctx[64];
       snprintf(ctx, sizeof(ctx), "render_pipelines.pipelines[%zu]", i);
       ok &= validateFields(pipelineFields, 8, &pips->arr[i], ctx, errors);
     }
+  }
+
+  return ok;
+}
+
+static const Field shaderStageFields[] = {
+  {"vertex",   String, true},
+  {"fragment", String, false},
+  {"compute",  String, false},
+  {"light",    String, false},
+};
+
+static const Field shaderRenderStateFields[] = {
+  {"depth_test",   Bool,   false},
+  {"depth_write",  Bool,   false},
+  {"cull_mode",    String, false},
+  {"blend_mode",   String, false},
+  {"front_face",   String, false},
+};
+
+static const Field shaderRootFields[] = {
+  {"version",      Number, false},
+  {"name",         String, true},
+  {"stages",       Object, true},
+  {"render_state", Object, false},
+  {"defaults",     Object, false},
+};
+
+bool validateShader(ctoon_value *shaderVal, std::string &errors) {
+  if (!shaderVal || shaderVal->type != CTOON_OBJECT)
+    return false;
+
+  ctoon_value *sh = ctoon_obj_get(shaderVal, "shader");
+  if (!sh || sh->type != CTOON_OBJECT) {
+    errors += "  shader: root object missing or invalid\n";
+    return false;
+  }
+
+  bool ok = validateFields(shaderRootFields, 5, sh, "shader", errors);
+
+  ctoon_value *stages = ctoon_obj_get(sh, "stages");
+  if (stages) {
+    ok &= validateFields(shaderStageFields, 4, stages, "shader.stages", errors);
+  }
+
+  ctoon_value *rs = ctoon_obj_get(sh, "render_state");
+  if (rs) {
+    ok &= validateFields(shaderRenderStateFields, 5, rs, "shader.render_state", errors);
   }
 
   return ok;

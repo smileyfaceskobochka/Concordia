@@ -1,6 +1,6 @@
 #include "pipeline.h"
 #include "../render/context.h"
-#include <fstream>
+#include <SDL3/SDL.h>
 #include <stdexcept>
 #include <vector>
 
@@ -50,7 +50,7 @@ void Pipeline::init(const Render::Context &context,
       VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
   raster.lineWidth = 1.0f;
   raster.cullMode = config.cullMode;
-  raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  raster.frontFace = config.frontFace;
 
   VkPipelineMultisampleStateCreateInfo ms{
       VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -63,8 +63,22 @@ void Pipeline::init(const Render::Context &context,
   ds.depthCompareOp = config.depthCompareOp;
 
   VkPipelineColorBlendAttachmentState cbAtt{};
-  cbAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  if (config.blendEnable) {
+    cbAtt.blendEnable = VK_TRUE;
+    cbAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cbAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cbAtt.colorBlendOp = VK_BLEND_OP_ADD;
+    cbAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cbAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    cbAtt.alphaBlendOp = VK_BLEND_OP_ADD;
+    // Do not write to the swapchain's alpha channel to avoid window compositor transparency/silhouette artifacts on Linux/Windows
+    cbAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                           VK_COLOR_COMPONENT_B_BIT;
+  } else {
+    cbAtt.blendEnable = VK_FALSE;
+    cbAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  }
 
   VkPipelineColorBlendStateCreateInfo cb{
       VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -136,23 +150,23 @@ void Pipeline::bind(VkCommandBuffer cb) const {
 
 VkShaderModule Pipeline::createShaderModule(VkDevice device,
                                             const std::string &path) {
-  std::ifstream file(path, std::ios::ate | std::ios::binary);
-  if (!file.is_open())
-    throw std::runtime_error("failed to open shader: " + path);
-  size_t fileSize = (size_t)file.tellg();
-  std::vector<char> buffer(fileSize);
-  file.seekg(0);
-  file.read(buffer.data(), fileSize);
-  file.close();
+  size_t fileSize = 0;
+  void *fileData = SDL_LoadFile(path.c_str(), &fileSize);
+  if (!fileData) {
+    throw std::runtime_error("failed to open shader: " + path + " error: " + SDL_GetError());
+  }
 
   VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-  smci.codeSize = buffer.size();
-  smci.pCode = reinterpret_cast<const uint32_t *>(buffer.data());
+  smci.codeSize = fileSize;
+  smci.pCode = reinterpret_cast<const uint32_t *>(fileData);
 
   VkShaderModule module;
   if (vkCreateShaderModule(device, &smci, nullptr, &module) != VK_SUCCESS) {
+    SDL_free(fileData);
     throw std::runtime_error("failed to create shader module");
   }
+
+  SDL_free(fileData);
   return module;
 }
 

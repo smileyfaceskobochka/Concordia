@@ -16,6 +16,7 @@ DescriptorManager::~DescriptorManager() {
   if (m_pool) vkDestroyDescriptorPool(m_device, m_pool, nullptr);
   if (m_globalLayout) vkDestroyDescriptorSetLayout(m_device, m_globalLayout, nullptr);
   if (m_materialLayout) vkDestroyDescriptorSetLayout(m_device, m_materialLayout, nullptr);
+  if (m_materialParamLayout) vkDestroyDescriptorSetLayout(m_device, m_materialParamLayout, nullptr);
 }
 
 void DescriptorManager::init(VkSampler defaultSampler, uint32_t bindlessCount,
@@ -69,6 +70,21 @@ void DescriptorManager::init(VkSampler defaultSampler, uint32_t bindlessCount,
   matLayoutInfo.pBindings = &bindlessBinding;
   VK_CHECK(vkCreateDescriptorSetLayout(m_device, &matLayoutInfo, nullptr,
                                         &m_materialLayout));
+
+  // Material parameters set layout: 1 binding (uniform buffer at binding 0)
+  VkDescriptorSetLayoutBinding paramBinding{};
+  paramBinding.binding = 0;
+  paramBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  paramBinding.descriptorCount = 1;
+  paramBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+  paramBinding.pImmutableSamplers = nullptr;
+
+  VkDescriptorSetLayoutCreateInfo paramLayoutInfo = {
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  paramLayoutInfo.bindingCount = 1;
+  paramLayoutInfo.pBindings = &paramBinding;
+  VK_CHECK(vkCreateDescriptorSetLayout(m_device, &paramLayoutInfo, nullptr,
+                                        &m_materialParamLayout));
 
   // Pool
   VkDescriptorPoolSize poolSizes[2] = {};

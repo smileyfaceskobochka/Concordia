@@ -10,12 +10,16 @@
 #include "memoria/sampler.h"
 #include "memoria/texture.h"
 #include "mundus/scene.h"
+#include "mundus/components.h"
+#include "mundus/systems/transform_system.h"
+#include "mundus/systems/visibility_system.h"
 #include "petra/window.h"
 #include "render/context.h"
 #include "sensus/input.h"
-#include "auxilia/toon.hpp"
+#include "auxilia/ctoon.hpp"
 #include "vigil/overlay.h"
 #include "vista/camera.h"
+#include <flecs.h>
 #include <memory>
 #include <vector>
 #include <vulkan/vulkan.h>
@@ -41,6 +45,9 @@ private:
   void initDescriptors();
   void resolveSceneMeshes();
   void syncMaterialIndices(std::shared_ptr<Forma::Material> mat);
+  void updateMaterialPipelineDefaults(Forma::Material *material);
+  void initMaterialResources(std::shared_ptr<Forma::Material> mat);
+  void cleanupMaterialResources(std::shared_ptr<Forma::Material> mat);
 
   void drawFrame();
   void updateBindlessDescriptorSet();
@@ -61,6 +68,12 @@ private:
   std::unique_ptr<Vigil::Overlay> m_overlay;
 
   Mundus::Scene m_scene;
+  flecs::world m_ecs;
+  flecs::entity m_ecsSkybox;
+
+  bool saveEcsCtoon(const char *path) const;
+  bool loadEcsCtoon(const char *path);
+
   std::unique_ptr<Vista::Camera> m_camera;
   std::unique_ptr<Sensus::Input> m_input;
 
@@ -74,7 +87,6 @@ private:
   };
   std::vector<SkyboxOption> m_skyboxOptions;
   uint32_t m_selectedSkybox = 0;
-  int m_skyboxEntityIndex = -1;
   std::shared_ptr<Memoria::TextureAsset> m_skyboxTexture;
   Lumen::IBLMaps m_iblMaps;
 
@@ -90,7 +102,7 @@ private:
 
   uint32_t m_frameIndex = 0;
   uint32_t m_debugMode = 0;
-  Auxilia::toon_doc m_config;
+  Auxilia::ctoon_doc m_config;
   bool m_needsResize = false;
   bool m_isRunning = true;
 
@@ -107,6 +119,8 @@ private:
   glm::vec3 m_lightDefaultDir = {-0.5f, -1.0f, -0.2f};
   glm::vec3 m_lightDefaultColor = {1.0f, 1.0f, 1.0f};
   glm::vec3 m_skyboxDefaultScale = {10.0f, 10.0f, 10.0f};
+  float m_totalTime = 0.0f;
+  size_t m_lastLoadedTextureCount = 0;
 };
 
 } // namespace Nucleus

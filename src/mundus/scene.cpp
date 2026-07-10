@@ -1,5 +1,6 @@
 #include "scene.h"
 #include "schema.h"
+#include "ctoon_helpers.h"
 #include <SDL3/SDL.h>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +11,8 @@
 #include <glm/gtc/quaternion.hpp>
 
 namespace Mundus {
+
+using namespace CtoonHelpers;
 
 glm::mat4 Transform::getLocalMatrix() const {
   glm::mat4 m = glm::translate(glm::mat4(1.0f), position);
@@ -52,132 +55,28 @@ void Scene::setEntityVisible(int index, bool v) {
   }
 }
 
-// ── helpers for TOON serialization ─────────────────────────────────────────
-
-static void set_str(toon_value *obj, const char *key, const char *val) {
-  toon_value *s = toon_obj_set(obj, key);
-  s->type = TOON_STRING;
-  if (val) {
-    s->str_val = (char *)malloc(strlen(val) + 1);
-    strcpy(s->str_val, val);
-  }
-}
-
-static void set_num(toon_value *obj, const char *key, double val) {
-  toon_value *s = toon_obj_set(obj, key);
-  s->type = TOON_NUMBER;
-  s->num_val = val;
-}
-
-static void set_bool(toon_value *obj, const char *key, int val) {
-  toon_value *s = toon_obj_set(obj, key);
-  s->type = TOON_BOOL;
-  s->bool_val = val;
-}
-
-static void set_obj(toon_value *parent, const char *key) {
-  toon_value *s = toon_obj_set(parent, key);
-  s->type = TOON_OBJECT;
-}
-
-static void set_vec3(toon_value *obj, const char *key, float a, float b, float c) {
-  char buf[80];
-  snprintf(buf, sizeof(buf), "@vec3(%g,%g,%g)", (double)a, (double)b, (double)c);
-  set_str(obj, key, buf);
-}
-
-static void set_vec4(toon_value *obj, const char *key, float a, float b,
-                     float c, float d) {
-  char buf[80];
-  snprintf(buf, sizeof(buf), "@vec4(%g,%g,%g,%g)", (double)a, (double)b,
-           (double)c, (double)d);
-  set_str(obj, key, buf);
-}
-
-static glm::vec3 get_vec3(toon_value *obj, const char *key, glm::vec3 fallback) {
-  toon_value *v = toon_obj_get(obj, key);
-  if (!v || v->type != TOON_STRING || !v->str_val)
-    return fallback;
-  float vals[3];
-  if (sscanf(v->str_val, "@vec3(%f,%f,%f)", &vals[0], &vals[1], &vals[2]) == 3)
-    return {vals[0], vals[1], vals[2]};
-  SDL_Log("Scene: invalid vec3 format in '%s' — expected @vec3(x,y,z)", key);
-  return fallback;
-}
-
-static glm::vec4 get_vec4(toon_value *obj, const char *key, glm::vec4 fallback) {
-  toon_value *v = toon_obj_get(obj, key);
-  if (!v || v->type != TOON_STRING || !v->str_val)
-    return fallback;
-  float vals[4];
-  if (sscanf(v->str_val, "@vec4(%f,%f,%f,%f)", &vals[0], &vals[1], &vals[2],
-             &vals[3]) == 4)
-    return {vals[0], vals[1], vals[2], vals[3]};
-  SDL_Log("Scene: invalid vec4 format in '%s' — expected @vec4(x,y,z,w)", key);
-  return fallback;
-}
-
-static void set_quat(toon_value *obj, const char *key, float x, float y,
-                     float z, float w) {
-  char buf[96];
-  snprintf(buf, sizeof(buf), "@quat(%g,%g,%g,%g)", (double)x, (double)y,
-           (double)z, (double)w);
-  set_str(obj, key, buf);
-}
-
-static glm::quat get_quat(toon_value *obj, const char *key, glm::quat fallback) {
-  toon_value *v = toon_obj_get(obj, key);
-  if (!v || v->type != TOON_STRING || !v->str_val)
-    return fallback;
-  float vals[4];
-  if (sscanf(v->str_val, "@quat(%f,%f,%f,%f)", &vals[0], &vals[1], &vals[2],
-             &vals[3]) == 4)
-    return glm::quat(vals[3], vals[0], vals[1], vals[2]);
-  SDL_Log("Scene: invalid quat format in '%s' — expected @quat(x,y,z,w)", key);
-  return fallback;
-}
-
-static void set_color(toon_value *obj, const char *key, float r, float g,
-                      float b, float a) {
-  char buf[96];
-  snprintf(buf, sizeof(buf), "@color(%g,%g,%g,%g)", (double)r, (double)g,
-           (double)b, (double)a);
-  set_str(obj, key, buf);
-}
-
-static glm::vec4 get_color(toon_value *obj, const char *key, glm::vec4 fallback) {
-  toon_value *v = toon_obj_get(obj, key);
-  if (!v || v->type != TOON_STRING || !v->str_val)
-    return fallback;
-  float vals[4];
-  if (sscanf(v->str_val, "@color(%f,%f,%f,%f)", &vals[0], &vals[1], &vals[2],
-             &vals[3]) == 4)
-    return {vals[0], vals[1], vals[2], vals[3]};
-  return fallback;
-}
-
 // ── save ───────────────────────────────────────────────────────────────────
 
 bool Scene::save(const char *path) const {
-  Auxilia::toon_doc doc(TOON_OBJECT);
-  toon_value *root = doc.get();
+  Auxilia::ctoon_doc doc(CTOON_OBJECT);
+  ctoon_value *root = doc.get();
 
-  toon_value *scene = toon_obj_set(root, "scene");
-  scene->type = TOON_OBJECT;
+  ctoon_value *scene = ctoon_obj_set(root, "scene");
+  scene->type = CTOON_OBJECT;
 
   set_vec3(scene, "light_dir", globalLightDir.x, globalLightDir.y,
            globalLightDir.z);
   set_vec3(scene, "light_color", globalLightColor.x, globalLightColor.y,
            globalLightColor.z);
 
-  toon_value *arr = toon_obj_set(scene, "entities");
-  arr->type = TOON_ARRAY;
+  ctoon_value *arr = ctoon_obj_set(scene, "entities");
+  arr->type = CTOON_ARRAY;
 
   auto r6 = [](double v) { return std::round(v * 1e6) / 1e6; };
 
   for (const auto &ent : m_entities) {
-    toon_value *e = toon_array_push(arr);
-    e->type = TOON_OBJECT;
+    ctoon_value *e = ctoon_array_push(arr);
+    e->type = CTOON_OBJECT;
 
     const char *eid = !ent.id.empty() ? ent.id.c_str() : ent.name.c_str();
     set_str(e, "id", eid);
@@ -202,8 +101,8 @@ bool Scene::save(const char *path) const {
     bool hasScale = ent.transform.scale != glm::vec3(1.0f);
     bool hasAngVel = ent.transform.angularVelocity != glm::vec3(0.0f);
     if (hasPos || hasRot || hasScale || hasAngVel) {
-      toon_value *tf = toon_obj_set(e, "transform");
-      tf->type = TOON_OBJECT;
+      ctoon_value *tf = ctoon_obj_set(e, "transform");
+      tf->type = CTOON_OBJECT;
       if (hasPos)
         set_vec3(tf, "pos", r6(ent.transform.position.x),
                  r6(ent.transform.position.y), r6(ent.transform.position.z));
@@ -233,8 +132,8 @@ bool Scene::save(const char *path) const {
     }
 
     if (ent.material) {
-      toon_value *m = toon_obj_set(e, "material");
-      m->type = TOON_OBJECT;
+      ctoon_value *m = ctoon_obj_set(e, "material");
+      m->type = CTOON_OBJECT;
       set_str(m, "shader", ent.material->shaderName.c_str());
       set_color(m, "base_color", ent.material->baseColor.x,
                 ent.material->baseColor.y, ent.material->baseColor.z,
@@ -258,7 +157,7 @@ bool Scene::save(const char *path) const {
 // ── load ───────────────────────────────────────────────────────────────────
 
 bool Scene::load(const char *path) {
-  Auxilia::toon_doc doc;
+  Auxilia::ctoon_doc doc;
   if (!doc.load_file(path))
     return false;
 
@@ -266,9 +165,9 @@ bool Scene::load(const char *path) {
     return false;
 
   {
-    toon_value *root = doc.get();
-    toon_value *sv = toon_obj_get(root, "scene");
-    if (sv && sv->type == TOON_OBJECT) {
+    ctoon_value *root = doc.get();
+    ctoon_value *sv = ctoon_obj_get(root, "scene");
+    if (sv && sv->type == CTOON_OBJECT) {
       std::string schemaErrors;
       if (!Schema::validateScene(sv, schemaErrors)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -280,12 +179,12 @@ bool Scene::load(const char *path) {
     }
   }
 
-  toon_value *root = doc.get();
-  toon_value *sceneVal = toon_obj_get(root, "scene");
-  if (!sceneVal || sceneVal->type != TOON_OBJECT)
+  ctoon_value *root = doc.get();
+  ctoon_value *sceneVal = ctoon_obj_get(root, "scene");
+  if (!sceneVal || sceneVal->type != CTOON_OBJECT)
     return false;
-  toon_value *arr = toon_obj_get(sceneVal, "entities");
-  if (!arr || arr->type != TOON_ARRAY)
+  ctoon_value *arr = ctoon_obj_get(sceneVal, "entities");
+  if (!arr || arr->type != CTOON_ARRAY)
     return true;
 
   // ── Pass 1: create all entities ───────────────────────────────────────
@@ -297,18 +196,18 @@ bool Scene::load(const char *path) {
   loaded.reserve(arr->len);
 
   for (size_t i = 0; i < arr->len; ++i) {
-    toon_value *e = &arr->arr[i];
-    if (e->type != TOON_OBJECT)
+    ctoon_value *e = &arr->arr[i];
+    if (e->type != CTOON_OBJECT)
       continue;
 
     LoadedEnt le;
 
-    toon_value *idv = toon_obj_get(e, "id");
-    if (idv && idv->type == TOON_STRING && idv->str_val)
+    ctoon_value *idv = ctoon_obj_get(e, "id");
+    if (idv && idv->type == CTOON_STRING && idv->str_val)
       le.ent.id = idv->str_val;
 
-    toon_value *nv = toon_obj_get(e, "name");
-    if (nv && nv->type == TOON_STRING && nv->str_val)
+    ctoon_value *nv = ctoon_obj_get(e, "name");
+    if (nv && nv->type == CTOON_STRING && nv->str_val)
       le.ent.name = nv->str_val;
 
     if (le.ent.id.empty())
@@ -316,20 +215,20 @@ bool Scene::load(const char *path) {
     if (le.ent.name.empty())
       le.ent.name = le.ent.id;
 
-    toon_value *pv = toon_obj_get(e, "parent");
-    if (pv && pv->type == TOON_STRING && pv->str_val) {
+    ctoon_value *pv = ctoon_obj_get(e, "parent");
+    if (pv && pv->type == CTOON_STRING && pv->str_val) {
       const char *ps = pv->str_val;
       size_t plen = strlen(ps);
       if (plen > 8 && strncmp(ps, "@entity(", 8) == 0 && ps[plen - 1] == ')')
         le.parentRef = std::string(ps + 8, plen - 9);
     }
 
-    toon_value *vv = toon_obj_get(e, "visible");
-    if (vv && vv->type == TOON_BOOL)
+    ctoon_value *vv = ctoon_obj_get(e, "visible");
+    if (vv && vv->type == CTOON_BOOL)
       le.ent.visible = vv->bool_val != 0;
 
-    toon_value *tf = toon_obj_get(e, "transform");
-    if (tf && tf->type == TOON_OBJECT) {
+    ctoon_value *tf = ctoon_obj_get(e, "transform");
+    if (tf && tf->type == CTOON_OBJECT) {
       le.ent.transform.position = get_vec3(tf, "pos", le.ent.transform.position);
       {
         glm::quat q = get_quat(tf, "rot", glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
@@ -340,8 +239,8 @@ bool Scene::load(const char *path) {
           get_vec3(tf, "angular_velocity", le.ent.transform.angularVelocity);
     }
 
-    toon_value *mesh = toon_obj_get(e, "mesh");
-    if (mesh && mesh->type == TOON_STRING && mesh->str_val) {
+    ctoon_value *mesh = ctoon_obj_get(e, "mesh");
+    if (mesh && mesh->type == CTOON_STRING && mesh->str_val) {
       const char *s = mesh->str_val;
       size_t len = strlen(s);
       if (len > 11 && strncmp(s, "@primitive(", 11) == 0 && s[len - 1] == ')') {
@@ -352,27 +251,27 @@ bool Scene::load(const char *path) {
       }
     }
 
-    toon_value *mat = toon_obj_get(e, "material");
-    if (mat && mat->type == TOON_OBJECT) {
+    ctoon_value *mat = ctoon_obj_get(e, "material");
+    if (mat && mat->type == CTOON_OBJECT) {
       auto m = std::make_shared<Forma::Material>();
 
-      toon_value *sh = toon_obj_get(mat, "shader");
-      if (sh && sh->type == TOON_STRING && sh->str_val)
+      ctoon_value *sh = ctoon_obj_get(mat, "shader");
+      if (sh && sh->type == CTOON_STRING && sh->str_val)
         m->shaderName = sh->str_val;
 
       m->baseColor = get_color(mat, "base_color", m->baseColor);
 
-      toon_value *rgh = toon_obj_get(mat, "roughness");
-      if (rgh && rgh->type == TOON_NUMBER)
+      ctoon_value *rgh = ctoon_obj_get(mat, "roughness");
+      if (rgh && rgh->type == CTOON_NUMBER)
         m->roughness = (float)rgh->num_val;
 
-      toon_value *met = toon_obj_get(mat, "metallic");
-      if (met && met->type == TOON_NUMBER)
+      ctoon_value *met = ctoon_obj_get(mat, "metallic");
+      if (met && met->type == CTOON_NUMBER)
         m->metallic = (float)met->num_val;
 
       auto loadTex = [&](const char *key, std::string &dst) {
-        toon_value *v = toon_obj_get(mat, key);
-        if (v && v->type == TOON_STRING && v->str_val)
+        ctoon_value *v = ctoon_obj_get(mat, key);
+        if (v && v->type == CTOON_STRING && v->str_val)
           dst = v->str_val;
       };
       loadTex("albedo", m->albedoSource);

@@ -1,6 +1,5 @@
 #include "texture.h"
 #include <SDL3/SDL.h>
-#include <iostream>
 #include <stb_image.h>
 #include <stdexcept>
 
@@ -23,8 +22,7 @@ void Texture::load(const std::string &path, Allocator &allocator,
   m_height = static_cast<uint32_t>(texHeight);
   VkDeviceSize imageSize = m_width * m_height * 4;
 
-  std::cout << "Texture loaded via STB: " << path << " (" << m_width << "x"
-            << m_height << ")" << std::endl;
+  SDL_Log("Texture loaded via STB: %s (%ux%u)", path.c_str(), m_width, m_height);
 
   VkBuffer stagingBuffer;
   VmaAllocation stagingAlloc;

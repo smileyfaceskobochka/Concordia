@@ -5,28 +5,30 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "toon.h"
+#include "ctoon.h"
+
+
 
 namespace Auxilia {
 
-class toon_doc {
+class ctoon_doc {
 public:
-  toon_doc();
-  explicit toon_doc(toon_type t);
-  explicit toon_doc(const char *path);
-  ~toon_doc();
+  ctoon_doc();
+  explicit ctoon_doc(ctoon_type t);
+  explicit ctoon_doc(const char *path);
+  ~ctoon_doc();
 
-  toon_doc(const toon_doc &) = delete;
-  toon_doc &operator=(const toon_doc &) = delete;
+  ctoon_doc(const ctoon_doc &) = delete;
+  ctoon_doc &operator=(const ctoon_doc &) = delete;
 
-  toon_doc(toon_doc &&other) noexcept;
-  toon_doc &operator=(toon_doc &&other) noexcept;
+  ctoon_doc(ctoon_doc &&other) noexcept;
+  ctoon_doc &operator=(ctoon_doc &&other) noexcept;
 
   bool load_file(const char *path);
   bool save_file(const char *path,
-                  const toon_encoder_opts *opts = nullptr) const;
+                  const ctoon_encoder_opts *opts = nullptr) const;
 
-  toon_type type() const;
+  ctoon_type type() const;
   bool valid() const;
 
   bool has(const char *dot_path) const;
@@ -41,16 +43,16 @@ public:
   void set(const char *dot_path, const char *val);
 
   size_t size() const;
-  toon_value *push();
+  ctoon_value *push();
 
-  toon_value *release();
-  toon_value *get() const;
-  void reset(toon_value *v = nullptr);
+  ctoon_value *release();
+  ctoon_value *get() const;
+  void reset(ctoon_value *v = nullptr);
 
 private:
   static void log_error(const char *msg);
 
-  toon_value *m_root = nullptr;
+  ctoon_value *m_root = nullptr;
 };
 
 } // namespace Auxilia

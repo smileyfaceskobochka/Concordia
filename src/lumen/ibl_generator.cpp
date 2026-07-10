@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include <stb_image.h>
 #include <vector>
+#include <thread>
 
 namespace Lumen {
 
@@ -250,33 +251,39 @@ static void generateIrradiance(const std::vector<std::vector<float>> &srcFaces,
   for (int f = 0; f < 6; ++f)
     outFaces[f].resize(IRRADIANCE_FACE_SIZE * IRRADIANCE_FACE_SIZE * 3, 0.0f);
 
+  std::vector<std::thread> threads;
   for (int f = 0; f < 6; ++f) {
-    for (int y = 0; y < IRRADIANCE_FACE_SIZE; ++y) {
-      for (int x = 0; x < IRRADIANCE_FACE_SIZE; ++x) {
-        float s = (x + 0.5f) / IRRADIANCE_FACE_SIZE;
-        float t = (y + 0.5f) / IRRADIANCE_FACE_SIZE;
-        glm::vec3 N = cubeFaceDir(f, s, t);
+    threads.push_back(std::thread([&, f]() {
+      for (int y = 0; y < IRRADIANCE_FACE_SIZE; ++y) {
+        for (int x = 0; x < IRRADIANCE_FACE_SIZE; ++x) {
+          float s = (x + 0.5f) / IRRADIANCE_FACE_SIZE;
+          float t = (y + 0.5f) / IRRADIANCE_FACE_SIZE;
+          glm::vec3 N = cubeFaceDir(f, s, t);
 
-        glm::vec3 acc(0.0f);
-        for (uint32_t i = 0; i < IRRADIANCE_SAMPLES; ++i) {
-          glm::vec2 xi = hammersley(i, IRRADIANCE_SAMPLES);
-          float theta = acos(sqrt(1.0f - xi.x));
-          float phi = 2.0f * PI * xi.y;
-          glm::vec3 localDir(
-              sin(theta) * cos(phi),
-              sin(theta) * sin(phi),
-              cos(theta));
-          glm::vec3 worldDir = tangentToWorld(localDir, N);
-          acc += sampleCubemapBilinear(srcFaces, srcFaceSize, worldDir);
+          glm::vec3 acc(0.0f);
+          for (uint32_t i = 0; i < IRRADIANCE_SAMPLES; ++i) {
+            glm::vec2 xi = hammersley(i, IRRADIANCE_SAMPLES);
+            float theta = acos(sqrt(1.0f - xi.x));
+            float phi = 2.0f * PI * xi.y;
+            glm::vec3 localDir(
+                sin(theta) * cos(phi),
+                sin(theta) * sin(phi),
+                cos(theta));
+            glm::vec3 worldDir = tangentToWorld(localDir, N);
+            acc += sampleCubemapBilinear(srcFaces, srcFaceSize, worldDir);
+          }
+          acc /= (float)IRRADIANCE_SAMPLES;
+
+          int idx = (y * IRRADIANCE_FACE_SIZE + x) * 3;
+          outFaces[f][idx + 0] = acc.x;
+          outFaces[f][idx + 1] = acc.y;
+          outFaces[f][idx + 2] = acc.z;
         }
-        acc /= (float)IRRADIANCE_SAMPLES;
-
-        int idx = (y * IRRADIANCE_FACE_SIZE + x) * 3;
-        outFaces[f][idx + 0] = acc.x;
-        outFaces[f][idx + 1] = acc.y;
-        outFaces[f][idx + 2] = acc.z;
       }
-    }
+    }));
+  }
+  for (auto &t : threads) {
+    t.join();
   }
 }
 
@@ -306,39 +313,45 @@ static void generatePrefilter(const std::vector<std::vector<float>> &srcFaces,
   float roughness = (float)mipLevel / (float)(numMips - 1);
   int numSamples = sampleCountForMip(mipLevel);
 
+  std::vector<std::thread> threads;
   for (int f = 0; f < 6; ++f) {
-    for (int y = 0; y < faceSize; ++y) {
-      for (int x = 0; x < faceSize; ++x) {
-        float s = (x + 0.5f) / faceSize;
-        float t = (y + 0.5f) / faceSize;
-        glm::vec3 N = cubeFaceDir(f, s, t);
-        glm::vec3 R = N;
-        glm::vec3 V = R;
+    threads.push_back(std::thread([&, f]() {
+      for (int y = 0; y < faceSize; ++y) {
+        for (int x = 0; x < faceSize; ++x) {
+          float s = (x + 0.5f) / faceSize;
+          float t = (y + 0.5f) / faceSize;
+          glm::vec3 N = cubeFaceDir(f, s, t);
+          glm::vec3 R = N;
+          glm::vec3 V = R;
 
-        glm::vec3 acc(0.0f);
-        float totalWeight = 0.0f;
+          glm::vec3 acc(0.0f);
+          float totalWeight = 0.0f;
 
-        for (uint32_t i = 0; i < (uint32_t)numSamples; ++i) {
-          glm::vec2 xi = hammersley(i, numSamples);
-          glm::vec3 H = importanceSampleGGX(xi, roughness);
-          glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+          for (uint32_t i = 0; i < (uint32_t)numSamples; ++i) {
+            glm::vec2 xi = hammersley(i, numSamples);
+            glm::vec3 H = importanceSampleGGX(xi, roughness);
+            glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
 
-          float NdotL = std::max(dot(N, L), 0.0f);
-          if (NdotL > 0.0f) {
-            acc += sampleCubemapBilinear(srcFaces, srcFaceSize, L) * NdotL;
-            totalWeight += NdotL;
+            float NdotL = std::max(dot(N, L), 0.0f);
+            if (NdotL > 0.0f) {
+              acc += sampleCubemapBilinear(srcFaces, srcFaceSize, L) * NdotL;
+              totalWeight += NdotL;
+            }
           }
+
+          if (totalWeight > 0.0f)
+            acc /= totalWeight;
+
+          int idx = (y * faceSize + x) * 3;
+          outFaces[f][idx + 0] = acc.x;
+          outFaces[f][idx + 1] = acc.y;
+          outFaces[f][idx + 2] = acc.z;
         }
-
-        if (totalWeight > 0.0f)
-          acc /= totalWeight;
-
-        int idx = (y * faceSize + x) * 3;
-        outFaces[f][idx + 0] = acc.x;
-        outFaces[f][idx + 1] = acc.y;
-        outFaces[f][idx + 2] = acc.z;
       }
-    }
+    }));
+  }
+  for (auto &t : threads) {
+    t.join();
   }
 }
 
@@ -352,43 +365,57 @@ static constexpr int BRDF_SAMPLES = 512;
 static void generateBRDF_LUT(std::vector<unsigned char> &data) {
   data.resize(BRDF_LUT_SIZE * BRDF_LUT_SIZE * 4, 0);
 
-  for (int y = 0; y < BRDF_LUT_SIZE; ++y) {
-    float NdotV = (y + 0.5f) / BRDF_LUT_SIZE;
-    for (int x = 0; x < BRDF_LUT_SIZE; ++x) {
-      float roughness = (x + 0.5f) / BRDF_LUT_SIZE;
+  unsigned int numThreads = std::thread::hardware_concurrency();
+  if (numThreads == 0) numThreads = 4;
+  std::vector<std::thread> threads;
+  int rowsPerThread = BRDF_LUT_SIZE / numThreads;
 
-      glm::vec3 V(sqrt(1.0f - NdotV * NdotV), 0.0f, NdotV);
-      glm::vec3 N(0.0f, 0.0f, 1.0f);
+  for (unsigned int t = 0; t < numThreads; ++t) {
+    int startY = t * rowsPerThread;
+    int endY = (t == numThreads - 1) ? BRDF_LUT_SIZE : (t + 1) * rowsPerThread;
+    threads.push_back(std::thread([&, startY, endY]() {
+      for (int y = startY; y < endY; ++y) {
+        float NdotV = (y + 0.5f) / BRDF_LUT_SIZE;
+        for (int x = 0; x < BRDF_LUT_SIZE; ++x) {
+          float roughness = (x + 0.5f) / BRDF_LUT_SIZE;
 
-      float scale = 0.0f, bias = 0.0f;
+          glm::vec3 V(sqrt(1.0f - NdotV * NdotV), 0.0f, NdotV);
+          glm::vec3 N(0.0f, 0.0f, 1.0f);
 
-      for (uint32_t i = 0; i < BRDF_SAMPLES; ++i) {
-        glm::vec2 xi = hammersley(i, BRDF_SAMPLES);
-        glm::vec3 H = importanceSampleGGX(xi, roughness);
-        glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+          float scale = 0.0f, bias = 0.0f;
 
-        float NdotL = std::max(L.z, 0.0f);
-        float NdotH = std::max(H.z, 0.0f);
-        float VdotH = std::max(glm::dot(V, H), 0.0f);
+          for (uint32_t i = 0; i < BRDF_SAMPLES; ++i) {
+            glm::vec2 xi = hammersley(i, BRDF_SAMPLES);
+            glm::vec3 H = importanceSampleGGX(xi, roughness);
+            glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
 
-        if (NdotL > 0.0f) {
-          float G = GeometrySmith(N, V, L, roughness);
-          float G_Vis = G * VdotH / (NdotH * NdotV);
-          float Fc = std::pow(1.0f - VdotH, 5.0f);
+            float NdotL = std::max(L.z, 0.0f);
+            float NdotH = std::max(H.z, 0.0f);
+            float VdotH = std::max(glm::dot(V, H), 0.0f);
 
-          scale += (1.0f - Fc) * G_Vis;
-          bias += Fc * G_Vis;
+            if (NdotL > 0.0f) {
+              float G = GeometrySmith(N, V, L, roughness);
+              float G_Vis = G * VdotH / (NdotH * NdotV);
+              float Fc = std::pow(1.0f - VdotH, 5.0f);
+
+              scale += (1.0f - Fc) * G_Vis;
+              bias += Fc * G_Vis;
+            }
+          }
+          scale /= BRDF_SAMPLES;
+          bias /= BRDF_SAMPLES;
+
+          int idx = (y * BRDF_LUT_SIZE + x) * 4;
+          data[idx + 0] = (unsigned char)(std::min(std::max(scale, 0.0f), 1.0f) * 255.0f);
+          data[idx + 1] = (unsigned char)(std::min(std::max(bias, 0.0f), 1.0f) * 255.0f);
+          data[idx + 2] = 0;
+          data[idx + 3] = 255;
         }
       }
-      scale /= BRDF_SAMPLES;
-      bias /= BRDF_SAMPLES;
-
-      int idx = (y * BRDF_LUT_SIZE + x) * 4;
-      data[idx + 0] = (unsigned char)(std::min(std::max(scale, 0.0f), 1.0f) * 255.0f);
-      data[idx + 1] = (unsigned char)(std::min(std::max(bias, 0.0f), 1.0f) * 255.0f);
-      data[idx + 2] = 0;
-      data[idx + 3] = 255;
-    }
+    }));
+  }
+  for (auto &t : threads) {
+    t.join();
   }
 }
 

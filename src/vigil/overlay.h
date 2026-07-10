@@ -1,8 +1,10 @@
 #pragma once
 
 #include "mundus/scene.h"
+#include "mundus/components.h"
 #include "petra/window.h"
 #include "render/context.h"
+#include <flecs.h>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 #include <filesystem>
@@ -45,7 +47,8 @@ public:
   void beginFrame();
 
   void drawUI(const Render::Context &renderCtx, DebugStats &stats,
-              Mundus::Scene &scene, Memoria::AssetManager &assetManager,
+              flecs::world &ecs,
+              Memoria::AssetManager &assetManager,
               VkSampler sampler, uint32_t *debugMode,
               uint32_t *selectedSkybox, uint32_t skyboxCount,
               const char *const *skyboxNames,
@@ -53,8 +56,8 @@ public:
 
   void endFrameAndRecord(VkCommandBuffer cmdBuf);
 
-  void setSelectedEntity(int idx) { m_selectedEntity = idx; }
-  int getSelectedEntity() const { return m_selectedEntity; }
+  void setSelectedEntity(flecs::entity e) { m_selectedEntity = e; }
+  flecs::entity getSelectedEntity() const { return m_selectedEntity; }
 
 private:
   struct FileEntry {
@@ -71,7 +74,7 @@ private:
 
   VkDevice m_device = VK_NULL_HANDLE;
   VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
-  int m_selectedEntity = -1;
+  flecs::entity m_selectedEntity;
 
   std::map<uint32_t, VkDescriptorSet> m_textureCache;
 
